@@ -321,3 +321,45 @@ tr.con .logit .tok { font-size: 10.5px; }
 #net .lrow { display: flex; gap: 6px; align-items: baseline; margin-bottom: 3px; }
 #net .lrow .sgn { flex: none; width: 1em; font-family: var(--mono); }
 #net .lrow .sgn.up { color: var(--up); } #net .lrow .sgn.down { color: var(--down); }
+
+/* experiment mode: n samples, measures, summaries, dose sweeps */
+.xf { display: inline-flex; align-items: center; gap: 5px; font: 11px var(--mono); color: var(--dim); }
+.xf input { width: 3.6em; text-align: center; padding: 3px 4px; font-size: 12px; }
+#x-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#x-controls select { padding: 3px 6px; font-size: 12px; max-width: 12em; }
+#x-controls > button { font-size: 12px; }
+#x-sweep { background: var(--raise); padding: 3px 10px; border-radius: 4px; }
+#x-editor { margin-top: 8px; padding: 8px; background: var(--raise); border-radius: 4px; display: grid; gap: 6px; }
+#x-editor[hidden] { display: none; }
+#x-editor .row { display: flex; gap: 8px; align-items: center; margin: 0; }
+#x-editor #xe-name { flex: 1; }
+#x-editor textarea { width: 100%; background: rgba(0,0,0,0.3); border: 0; border-radius: 4px; padding: 6px 8px; color: inherit; font: 12px var(--mono); resize: vertical; }
+#x-editor #xe-msg { font-size: 12px; }
+#x-editor #xe-close { margin-left: auto; }
+#sort { padding: 2px 4px; font-size: 12px; }
+.turn .cols.sum { margin-bottom: 8px; }
+.xs { font: 11.5px/1.6 var(--mono); font-variant-numeric: tabular-nums; }
+.xs .k { display: inline-block; width: 3.4em; color: var(--faint); }
+.picker { display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 8px; }
+.picker button { font: 11px var(--mono); color: var(--faint); padding: 1px 6px; border-radius: 3px; }
+.picker button.on { color: var(--ink); background: rgba(255,255,255,0.14); }
+.xline { font-size: 12.5px; color: var(--ink); margin-top: 6px; }
+.xnote { font-size: 12px; margin-top: 6px; }
+.xnote.warn { color: var(--up); }
+.xnote .x-cancel { color: var(--ink); text-decoration: underline; font-size: 12px; }
+.xwin { font: 12px/1.7 var(--mono); }
+.xwin .sgn { display: inline-block; width: 1.2em; }
+.xwin .sgn.up { color: var(--up); } .xwin .sgn.down { color: var(--down); }
+.turn.sweep .sweep-head { margin-left: 0; max-width: 100%; }
+.xsent summary { font-size: 12px; cursor: pointer; margin-top: 6px; }
+.xplot { width: 100%; max-width: 640px; height: auto; display: block; margin: 6px 0; }
+.xplot .ax { stroke: var(--line); }
+.xplot .tk { fill: var(--faint); font: 10px var(--mono); }
+.xplot .pl { fill: var(--dim); font: 10.5px var(--mono); }
+.xplot .mean { fill: none; stroke: var(--faint); stroke-width: 1; }
+.xplot .thr { stroke: var(--down); stroke-dasharray: 3 3; opacity: 0.6; }
+.xplot .ci { stroke-width: 1.5; }
+.xplot .ci.up, .xplot .pt.up { stroke: var(--up); fill: var(--up); }
+.xplot .ci.down, .xplot .pt.down { stroke: var(--down); fill: var(--down); }
+.xplot .ci.zero, .xplot .pt.zero { stroke: var(--ink); fill: var(--ink); }
+#d-window { margin-bottom: 14px; }

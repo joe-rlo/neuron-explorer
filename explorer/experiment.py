@@ -24,17 +24,18 @@ def config():
 WORD = re.compile(r"\w+(?:'\w+)?")
 
 
-def _words_re(words):
+def _words_re(words, stems=False):
     alts = sorted({w.strip().lower() for w in words if w.strip()}, key=len, reverse=True)
-    return re.compile(r"(?<!\w)(?:" + "|".join(re.escape(w) for w in alts) + r")(?!\w)", re.I) if alts else None
+    end = "" if stems else r"(?!\w)"
+    return re.compile(r"(?<!\w)(?:" + "|".join(re.escape(w) for w in alts) + r")" + end, re.I) if alts else None
 
 
 def score(measure, text):
     """One reply's score under a measure: {type: words, words: [...]} hits per 100 words (case-insensitive,
-    whole-word); {type: contains, word} 1 or 0; {type: regex, pattern} match count."""
+    whole-word, or word-start with stems: true); {type: contains, word} 1 or 0; {type: regex, pattern} match count."""
     kind = measure["type"]
     if kind == "words":
-        rx = _words_re(measure.get("words") or [])
+        rx = _words_re(measure.get("words") or [], measure.get("stems", False))
         n = len(WORD.findall(text))
         return 0.0 if not rx or not n else 100.0 * len(rx.findall(text)) / n
     if kind == "contains":

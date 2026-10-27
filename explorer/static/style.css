@@ -176,6 +176,8 @@ body.list-hidden #layer-back { left: 56px; }
 #c-lens { margin-bottom: 12px; font-size: 13.5px; line-height: 1.55; min-height: 2.6em; }
 #c-lens .sgn { display: inline-block; width: 1.1em; font-family: var(--mono); }
 #c-lens .sgn.up { color: var(--up); } #c-lens .sgn.down { color: var(--down); }
+#c-lens .ll { display: inline-block; width: 5.4em; font: 11px var(--mono); }
+#c-lens .ll.up { color: var(--up); } #c-lens .ll.down { color: var(--down); }
 
 /* chat as a thread: lens on top, turns in the middle, composer at the bottom */
 #tab-chat.on { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
@@ -337,10 +339,18 @@ tr.con .logit .tok { font-size: 10.5px; }
 #x-editor #xe-msg { font-size: 12px; }
 #x-editor #xe-close { margin-left: auto; }
 #sort { padding: 2px 4px; font-size: 12px; }
-.turn .cols.sum { margin-bottom: 8px; }
-.xs { font: 11.5px/1.6 var(--mono); font-variant-numeric: tabular-nums; }
-.xs .k { display: inline-block; width: 3.4em; color: var(--faint); }
-.picker { display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 8px; }
+.xk { font: 11px var(--mono); color: var(--faint); min-width: 4.6em; }
+#x-controls .xgap { flex: 1; }
+#x-more { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 0 calc(4.6em + 10px); }
+#x-more[hidden] { display: none; }
+#tab-chat.reads #x-controls, #tab-chat.reads #x-more, #tab-chat.reads #x-editor { display: none; }
+.xs { font: 11px/1.5 var(--mono); font-variant-numeric: tabular-nums; white-space: normal; margin-bottom: 8px; color: var(--ink); }
+.xs > div { display: grid; grid-template-columns: minmax(0, 6.2em) 1fr; gap: 6px; }
+.xs .k { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xs .ci { display: block; color: var(--faint); }
+.turn .col .one { display: block; font: 11px var(--mono); color: var(--faint); margin-top: 6px; }
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 0 0 8px; }
+.picker .xk { min-width: 0; margin-right: 6px; }
 .picker button { font: 11px var(--mono); color: var(--faint); padding: 1px 6px; border-radius: 3px; }
 .picker button.on { color: var(--ink); background: rgba(255,255,255,0.14); }
 .xline { font-size: 12.5px; color: var(--ink); margin-top: 6px; }
@@ -350,6 +360,10 @@ tr.con .logit .tok { font-size: 10.5px; }
 .xwin { font: 12px/1.7 var(--mono); }
 .xwin .sgn { display: inline-block; width: 1.2em; }
 .xwin .sgn.up { color: var(--up); } .xwin .sgn.down { color: var(--down); }
+.xwin .lab { margin: 6px 0 2px; cursor: help; }
+.xwin .lab .q { display: inline-block; width: 1.3em; text-align: center; border-radius: 50%; background: var(--raise); color: var(--dim); }
+.xlegend { font-size: 11.5px; margin: 0 0 6px; }
+.xlegend .thr-key { color: var(--down); }
 .turn.sweep .sweep-head { margin-left: 0; max-width: 100%; }
 .xsent summary { font-size: 12px; cursor: pointer; margin-top: 6px; }
 .xplot { width: 100%; max-width: 640px; height: auto; display: block; margin: 6px 0; }

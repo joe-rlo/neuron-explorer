@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuron Explorer</title>
-<link rel="stylesheet" href="style.css?v=67">
+<link rel="stylesheet" href="style.css?v=68">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%23151515%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%23ffd27a%22/%3E%3C/svg%3E">
 <script type="importmap">
 {"imports": {
@@ -86,18 +86,24 @@
       <div id="c-reads"></div>
       <form id="c-form">
         <div id="chat-controls">
-          <span class="seg" id="c-mode"><button type="button" data-m="add" class="on">add</button><button type="button" data-m="mul">×</button></span>
-          <span class="seg" id="c-dir"><button type="button" data-d="writes" class="on">writes</button><button type="button" data-d="reads">reads you</button></span>
-          <span class="stepper"><button type="button" id="c-minus" aria-label="smaller">−</button><input id="c-dose" class="mono" inputmode="decimal" aria-label="dose" value="0.8"><button type="button" id="c-plus" aria-label="larger">+</button></span>
-          <label class="xf" title="samples per column; sample i uses seed + i in every column, so columns compare sample by sample">n<input id="x-n" class="mono" inputmode="numeric" value="8" aria-label="samples per column"></label>
-          <button type="button" id="c-clear" class="dim">clear</button>
+          <span class="xk">steer</span>
+          <span class="seg" id="c-mode"><button type="button" data-m="add" class="on" title="add: push along the neuron's output direction by dose × a typical residual size (▲ +dose, ▼ −dose)">add</button><button type="button" data-m="mul" title="×: multiply the neuron's activation by the dose (▲ ×dose, ▼ ×−dose); ×1 leaves it alone">×</button></span>
+          <span class="seg" id="c-dir"><button type="button" data-d="writes" class="on" title="writes: steer the model with this neuron and compare its replies">writes</button><button type="button" data-d="reads" title="reads you: color each token of your text by how strongly this neuron fires on it">reads you</button></span>
+          <span class="stepper" title="dose: the ▲ column is pushed by +dose, the ▼ column by −dose, the middle column is unsteered"><button type="button" id="c-minus" aria-label="smaller dose">−</button><input id="c-dose" class="mono" inputmode="decimal" aria-label="dose" value="0.8"><button type="button" id="c-plus" aria-label="larger dose">+</button></span>
+          <button type="button" id="c-clear" class="dim" title="clear the conversation (and cancel a running sweep)">clear</button>
         </div>
         <div id="x-controls">
-          <select id="x-measure" aria-label="outcome measure" title="outcome measure, scored on every reply (coherence and script mix are always scored too)"></select><button type="button" id="x-edit" class="dim" title="edit measures">edit</button>
-          <label class="xf" title="sampling temperature; 0 decodes greedily (every sample identical)">temp<input id="x-temp" class="mono" inputmode="decimal" value="0.7" aria-label="temperature"></label>
-          <label class="xf" title="max new tokens per reply">tokens<input id="x-max" class="mono" inputmode="numeric" value="200" aria-label="max new tokens"></label>
-          <label class="xf" title="base seed">seed<input id="x-seed" class="mono" inputmode="numeric" value="0" aria-label="base seed"></label>
-          <button type="button" id="x-sweep" title="run this prompt and measure across the dose grid (add mode)">dose sweep</button><button type="button" id="x-quick" class="dim" title="quick sweep: 3 doses, n = 4, 80 tokens">quick</button>
+          <span class="xk">measure</span>
+          <select id="x-measure" aria-label="outcome measure" title="what to count in every reply; coherence (how natural the text is to the unsteered model) is always scored too"></select><button type="button" id="x-edit" class="dim" title="edit or add measures">edit</button>
+          <label class="xf" title="replies per column; reply i uses the same seed in every column, so the columns compare reply by reply">samples<input id="x-n" class="mono" inputmode="numeric" value="8" aria-label="samples per column"></label>
+          <button type="button" id="x-more-btn" class="dim" aria-expanded="false" title="temperature, reply length and seed">settings</button>
+          <span class="xgap"></span>
+          <button type="button" id="x-sweep" title="run this prompt at doses −1 to +1 and plot the measure and coherence against dose">dose sweep</button><button type="button" id="x-quick" class="dim" title="a fast sweep: doses −0.5, 0, +0.5 with 4 short replies each">quick sweep</button>
+        </div>
+        <div id="x-more" hidden>
+          <label class="xf" title="sampling temperature; 0 is greedy, so every sample would be identical">temperature<input id="x-temp" class="mono" inputmode="decimal" value="0.7" aria-label="temperature"></label>
+          <label class="xf" title="maximum new tokens per reply">max tokens<input id="x-max" class="mono" inputmode="numeric" value="200" aria-label="max new tokens"></label>
+          <label class="xf" title="reply i uses seed + i; the same seed gives the same replies">seed<input id="x-seed" class="mono" inputmode="numeric" value="0" aria-label="base seed"></label>
         </div>
         <div id="x-editor" hidden></div>
         <div class="row"><input id="c-input" placeholder="Who are you?" autocomplete="off"><button id="c-go" type="submit">run</button></div>
@@ -112,6 +118,6 @@
     </div>
   </aside>
 </main>
-<script type="module" src="app.js?v=125"></script>
+<script type="module" src="app.js?v=130"></script>
 </body>
 </html>

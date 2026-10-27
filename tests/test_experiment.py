@@ -23,6 +23,12 @@ def test_words_multiword_phrase():
     assert ex.score(m, "I like ice cream and ice") == pytest.approx(100 * 1 / 6)
 
 
+def test_words_stems_match_word_starts():
+    m = {"type": "words", "words": ["alien", "extr"], "stems": True}
+    assert ex.score(m, "Aliens from extraterrestrial space, not mine") == pytest.approx(100 * 2 / 6)
+    assert ex.score(m, "salient") == 0  # still anchored at the start of a word
+
+
 def test_contains():
     assert ex.score(PIZZA, "I love Pizza!") == 1
     assert ex.score(PIZZA, "pizzeria") == 0

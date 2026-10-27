@@ -391,3 +391,14 @@ tr.con .logit .tok { font-size: 10.5px; }
 .xplot .ci.down, .xplot .pt.down { stroke: var(--down); fill: var(--down); }
 .xplot .ci.zero, .xplot .pt.zero { stroke: var(--ink); fill: var(--ink); }
 #d-window { margin-bottom: 14px; }
+
+/* first-run tour */
+#tour[hidden] { display: none; }
+#tour-btn { font: 12px var(--mono); width: 22px; height: 22px; border-radius: 50%; background: var(--raise); }
+#tour-ring { position: fixed; z-index: 30; border: 1.5px solid var(--up); border-radius: 6px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.45); transition: all .25s; }
+#tour-card { position: fixed; z-index: 31; background: #1b1f22; border-radius: 6px; padding: 12px 14px; font-size: 13px;
+  line-height: 1.5; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+#tour-card p { margin: 6px 0 10px; color: var(--dim); }
+#tour-card .row { display: flex; gap: 10px; justify-content: flex-end; }
+#tour-card button[data-t="next"] { background: var(--raise); padding: 3px 12px; border-radius: 4px; }

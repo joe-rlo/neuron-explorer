@@ -1182,6 +1182,47 @@ loadExperiments();
 await setLayer(first);
 if (location.hash) fromHash(); else restoreFocus();
 
+// ---------- first-run tour: six steps pointing at the main controls; "seen" is kept in this browser ----------
+const TOUR = [
+  { sel: "#map", title: "The map", text: "Each sheet is one layer of the model and each dot is one neuron. Click a dot to open it. Brighter amber dots cluster on words more than random controls do; the legend at the bottom explains every color." },
+  { sel: "#q-mode", title: "Search", text: "lens finds neurons whose lens has your word, so they push the model toward or away from it. fires runs your text through the model and lists the neurons that fire most on it." },
+  { sel: "#jump", title: "Go to a neuron", text: "Type a layer and neuron, like L22 N2742, and press Enter. In the layer menu, ● marks the layers with sweep rollouts." },
+  { sel: "#list", title: "The list", text: "The open neuron's lenses and connection web, then this layer's neurons ranked by word mass. On a search, the hits: + and − are both strong, the sign is the direction." },
+  { sel: "#focus", title: "Chat with a steered model", text: "Open a neuron, then Chat. The three columns push the neuron up, leave it alone and push it down. Pick a measure and a number of samples to get means, 95% intervals and a one-line reading." },
+  { sel: "#x-sweep", title: "Dose sweep", text: "Runs the prompt from −1 to +1 and plots the measure and coherence, then reports where the effect starts and where the text breaks. Hover any control to see what it does." },
+];
+let tourAt = -1;
+function tourSeen() { try { localStorage.setItem("ne.tour", "seen"); } catch {} }
+function endTour() { tourAt = -1; $("#tour").hidden = true; tourSeen(); }
+function showTour(i) {
+  tourAt = i;
+  const st = TOUR[i], el = $(st.sel), box = $("#tour"), ring = $("#tour-ring"), card = $("#tour-card");
+  box.hidden = false;
+  const r = el && el.offsetParent !== null ? el.getBoundingClientRect() : null;
+  const on = r && r.width > 0 && r.height > 0 && r.width < innerWidth * 0.8;  // a full-screen target (the map) gets a centered card
+  ring.style.display = on ? "" : "none";
+  if (on) Object.assign(ring.style, { left: `${r.left - 4}px`, top: `${r.top - 4}px`, width: `${r.width + 8}px`, height: `${r.height + 8}px` });
+  card.innerHTML = `<div class="lab">${i + 1} / ${TOUR.length}</div><b>${esc(st.title)}</b><p>${esc(st.text)}</p>
+    <div class="row">${i ? `<button type="button" data-t="back" class="dim">back</button>` : ""}<button type="button" data-t="skip" class="dim">skip</button><button type="button" data-t="next">${i === TOUR.length - 1 ? "done" : "next"}</button></div>`;
+  // beside the target where it fits (below, above, then centered), kept on screen
+  const cw = Math.min(340, innerWidth - 32), ch = card.offsetHeight || 160;
+  let x = on ? r.left : (innerWidth - cw) / 2, y = on ? r.bottom + 12 : (innerHeight - ch) / 2;
+  if (on && y + ch > innerHeight - 16) y = r.top - ch - 12;
+  if (on && y < 16) { y = Math.max(16, (innerHeight - ch) / 2); x = r.right + 12 + cw > innerWidth ? r.left - cw - 12 : r.right + 12; }
+  Object.assign(card.style, { width: `${cw}px`, left: `${Math.max(16, Math.min(x, innerWidth - cw - 16))}px`, top: `${Math.max(16, Math.min(y, innerHeight - ch - 16))}px` });
+  card.querySelector('[data-t="next"]').focus();
+}
+$("#tour-card").addEventListener("click", e => {
+  const t = e.target.closest("button")?.dataset.t; if (!t) return;
+  if (t === "skip" || (t === "next" && tourAt === TOUR.length - 1)) return endTour();
+  showTour(tourAt + (t === "next" ? 1 : -1));
+});
+addEventListener("keydown", e => { if (tourAt >= 0 && e.key === "Escape") endTour(); });
+addEventListener("resize", () => { if (tourAt >= 0) showTour(tourAt); });
+$("#tour-btn").onclick = () => showTour(0);
+let seenTour = false; try { seenTour = localStorage.getItem("ne.tour") === "seen"; } catch {}
+if (!seenTour) showTour(0);
+
 // ---------- claude: the Claude tab, one claude -p session per conversation ----------
 const agent = { chat: null, kind: "claude", busy: false, sending: 0, box: null, seg: null, segText: "", reply: "", waiters: [] };
 const agentEl = $("#tab-claude");

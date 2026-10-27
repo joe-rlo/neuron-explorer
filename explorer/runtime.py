@@ -577,7 +577,7 @@ class Runtime:
     def steer_stream(self, layer, n, rows_messages, dose, mode, max_new=200, cancel=None):
         """Greedy-decodes three conversations in one batch: row 0 pushed up, row 1 unsteered, row 2 pushed down.
         rows_messages holds each row's own message list (the rows can differ in length; they are left-padded).
-        Yields (row, text_delta), then (None, None)."""
+        Yields (row, text_delta), then (None, [token ids per row])."""
         yield from self.steer_multi([(layer, n, dose, mode)], rows_messages, max_new, cancel)
 
     def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None):
@@ -585,11 +585,33 @@ class Runtime:
         Each is reversed in row 2 the same way a single neuron is (add: -dose; mul: x -dose)."""
         self.ensure_loaded()
         with self.lock:
+            push = [self._push_entry(layer, n, dose, mode, (1, 0, -1)) for layer, n, dose, mode in pushes]
+        yield from self.generate(push, rows_messages, max_new, cancel)
+
+    def push_rows(self, layer, n, mode, values):
+        """One neuron's push with an explicit dose per batch row, in the user's units: add values are multiples of
+        the layer's median residual norm (0 = left alone); mul values multiply the activation (1 = left alone)."""
+        if mode == "mul":
+            vals = list(values)
+        else:
+            unit = self.layer_resid_p50(layer) / float(self.down_col(layer, n).norm())
+            vals = [v * unit for v in values]
+        return (layer, n, mode, torch.tensor(vals, device=self.dev))
+
+    def generate(self, push, rows_messages, max_new=200, cancel=None, seeds=None, temperature=0.0):
+        """Decodes every row of a batch, each with its own message list (left-padded), under `push` (entries from
+        push_rows / _push_entry, one value per row). temperature 0 is greedy. Otherwise row r samples by inverse CDF
+        from its own generator seeded seeds[r], drawing one uniform per step whether or not it has finished, so rows
+        that share a seed share every draw (paired samples stay on the same tokens until a push tips one).
+        Yields (row, text_delta), then (None, [token ids per row])."""
+        self.ensure_loaded()
+        with self.lock:
             if cancel is not None and cancel.is_set():
                 yield None, None
                 return
             try:
-                push = [self._push_entry(layer, n, dose, mode, (1, 0, -1)) for layer, n, dose, mode in pushes]
+                B = len(rows_messages)
+                gens = [np.random.Generator(np.random.PCG64(int(s))) for s in seeds] if temperature > 0 else None
                 seqs = [self.messages_ids(m) for m in rows_messages]
                 T = max(map(len, seqs))
                 pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
@@ -597,16 +619,24 @@ class Runtime:
                 mask = torch.tensor([[0] * (T - len(q)) + [1] * len(q) for q in seqs], device=self.dev)
                 pos = (mask.cumsum(-1) - 1).clamp(min=0)
                 eos = self.tok.convert_tokens_to_ids("<|im_end|>")
-                done, out_ids, sent = [False] * 3, [[] for _ in range(3)], [""] * 3
-                self._push = push
+                done, out_ids, sent = [False] * B, [[] for _ in range(B)], [""] * B
+                self._push = push or None
                 with torch.inference_mode():
                     out = self.model(input_ids=ids, attention_mask=mask, position_ids=pos, use_cache=True,
                                      logits_to_keep=1)
                     for _ in range(max_new):
                         if cancel is not None and cancel.is_set():
                             break
-                        nxt = out.logits[:, -1].argmax(-1)
-                        for r in range(3):
+                        if gens is None:
+                            nxt = out.logits[:, -1].argmax(-1)
+                        else:
+                            # cumulative probabilities on the CPU in float64, so the draw maps to the same token on
+                            # any device once the logits agree
+                            cdf = torch.softmax(out.logits[:, -1].float() / temperature, -1).cpu().double().cumsum(-1)
+                            u = torch.tensor([g.random() for g in gens], dtype=torch.float64)[:, None] * cdf[:, -1:]
+                            pick = torch.searchsorted(cdf, u).clamp(max=cdf.shape[1] - 1)[:, 0]
+                            nxt = pick.to(self.dev)
+                        for r in range(B):
                             if done[r]:
                                 continue
                             t = int(nxt[r])
@@ -626,7 +656,24 @@ class Runtime:
                                          past_key_values=out.past_key_values, use_cache=True, logits_to_keep=1)
             finally:
                 self._push = None
-        yield None, None
+        yield None, out_ids
+
+    def reply_logprob(self, rows_messages, replies):
+        """Coherence: the mean per-token logprob of each reply (token ids) under the unsteered model, given its own
+        conversation. None for an empty reply."""
+        self.ensure_loaded()
+        out = []
+        with self.lock, torch.inference_mode():
+            for msgs, rep in zip(rows_messages, replies):
+                if not rep:
+                    out.append(None)
+                    continue
+                ids = self.messages_ids(msgs) + list(rep)
+                lg = self.model(input_ids=torch.tensor([ids], device=self.dev), use_cache=False,
+                                logits_to_keep=len(rep) + 1).logits[0, :-1].float()
+                lp = torch.log_softmax(lg, -1).gather(-1, torch.tensor(rep, device=self.dev)[:, None])
+                out.append(float(lp.mean()))
+        return out
 
     def token_units(self, ids):
         """Groups token ids into displayable units: byte-level pieces of one multi-byte character (emoji, CJK split
@@ -657,11 +704,8 @@ class Runtime:
         if n is None and mode != "mul":
             raise ValueError("a whole-layer MLP push must be mode 'mul' (e.g. dose 0 to ablate)")
         if mode == "mul":
-            vals = [dose if r > 0 else 1.0 if r == 0 else -dose for r in rows]
-        else:
-            unit = self.layer_resid_p50(layer) / float(self.down_col(layer, n).norm())
-            vals = [r * dose * unit for r in rows]
-        return (layer, n, mode, torch.tensor(vals, device=self.dev))
+            return self.push_rows(layer, n, mode, [dose if r > 0 else 1.0 if r == 0 else -dose for r in rows])
+        return self.push_rows(layer, n, mode, [r * dose for r in rows])
 
     def read(self, layer, n, text, chat=True, pushes=None, heads=None):
         """Per-token activation of neuron n at `layer` on `text` (as a user turn when chat=True), optionally with other

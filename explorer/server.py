@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(ROOT, "sweep"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rank import compute_units  # noqa: E402
 from runtime import CACHE, NO_MODEL, Runtime  # noqa: E402
+import experiment as exm  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 NAMES = os.path.join(ROOT, "explorer", "names.json")
@@ -245,23 +246,54 @@ async def reads(req: Request):
 
 @app.post("/api/steer")
 async def steer(req: Request):
+    """The neuron panel's steered chat: three columns (pushed up, unsteered, pushed down), each sampled `samples` times with
+    paired seeds (sample i uses seed + i in every column; temperature 0 is greedy). Streams {row, s, t} text deltas,
+    then {phase: "scoring"}, a {summary} per column scored with `measure` (plus coherence and script mix) and {end}.
+    Runs with a measure are saved to experiments/."""
     b = await req.json()
     loop, q, cancel = asyncio.get_running_loop(), asyncio.Queue(), threading.Event()
+    cfg = exm.config()
+    n = builtins.max(1, builtins.min(32, int(b.get("samples", 1))))
+    temp, seed = float(b.get("temperature", 0)), int(b.get("seed", cfg["seed"]))
+    layer, neuron, dose, mode = int(b["layer"]), int(b["n"]), float(b["dose"]), b.get("mode", "add")
+    max_new, measure = int(b.get("max_new", 300)), b.get("measure")
+    put = lambda ev: loop.call_soon_threadsafe(q.put_nowait, ev)
 
     def work():
         try:
-            # each row replays its own earlier replies; the user turns are shared
-            rows = []
-            for r in range(3):
+            # each (column, sample) replays its own earlier replies; the user turns are shared
+            def history(c, i):
                 msgs = []
                 for turn in b.get("history", []):
-                    msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["replies"][r]}]
-                rows.append(msgs + [{"role": "user", "content": b["prompt"]}])
-            for row, delta in rt.steer_stream(int(b["layer"]), int(b["n"]), rows, float(b["dose"]),
-                                              b.get("mode", "add"), int(b.get("max_new", 300)), cancel):
-                loop.call_soon_threadsafe(q.put_nowait, {"row": row, "t": delta})
+                    rep = turn["replies"][c]
+                    rep = rep[i % len(rep)] if isinstance(rep, list) else rep
+                    msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": rep}]
+                return msgs + [{"role": "user", "content": b["prompt"]}]
+            rows = [(c, i) for i in range(n) for c in range(3)]
+            msgs = {(c, i): history(c, i) for c, i in rows}
+            texts, ids = {}, {}
+            per = builtins.max(1, cfg["max_batch"] // 3) * 3
+            rt.ensure_loaded()
+            for k in range(0, len(rows), per):
+                chunk = rows[k:k + per]
+                with rt.lock:
+                    push = [rt._push_entry(layer, neuron, dose, mode, [(1, 0, -1)[c] for c, _ in chunk])]
+                for r, delta in rt.generate(push, [msgs[x] for x in chunk], max_new, cancel,
+                                            [seed + i for _, i in chunk], temp):
+                    if r is None:
+                        for x, out in zip(chunk, delta or []):
+                            ids[x] = out
+                        continue
+                    texts[chunk[r]] = texts.get(chunk[r], "") + delta
+                    put({"row": chunk[r][0], "s": chunk[r][1], "t": delta})
+                if cancel.is_set():
+                    break
+            if measure and not cancel.is_set():
+                put({"phase": "scoring"})
+                put({"summary": _chat_summary(b, cfg, n, temp, seed, max_new, rows, msgs, texts, ids)})
         except Exception as e:  # surfaced in the UI next to the chat
-            loop.call_soon_threadsafe(q.put_nowait, {"row": None, "error": repr(e)})
+            put({"error": repr(e)})
+        put({"end": True})
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -270,7 +302,7 @@ async def steer(req: Request):
             while True:
                 ev = await q.get()
                 yield f"data: {json.dumps(ev)}\n\n"
-                if ev["row"] is None:
+                if ev.get("end"):
                     break
                 if await req.is_disconnected():
                     cancel.set()
@@ -279,6 +311,234 @@ async def steer(req: Request):
             cancel.set()
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+# ---------- experiment mode ----------
+EXPERIMENTS = os.path.join(ROOT, "experiments")
+MEASURES = os.path.join(EXPERIMENTS, "measures.json")
+WINDOWS = os.path.join(EXPERIMENTS, "windows.json")
+_git = {}
+_jobs = {}
+
+
+def _git_commit():
+    if "head" not in _git:
+        import subprocess
+        try:
+            _git["head"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                          timeout=5).stdout.strip() or None
+        except Exception:
+            _git["head"] = None
+    return _git["head"]
+
+
+def _read_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(exm.finite(value), f, indent=1, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _save_experiment(kind, rec):
+    import datetime
+    import uuid
+    now = datetime.datetime.now()
+    eid = f"{now:%Y%m%d-%H%M%S}-L{rec['layer']}N{rec['neurons'][0]['n']}-{kind}-{uuid.uuid4().hex[:4]}"
+    rec = {"id": eid, "timestamp": now.isoformat(timespec="seconds"), "kind": kind, "model": "Qwen/Qwen3.5-4B",
+           "git_commit": _git_commit(), "device": getattr(rt, "dev", None), **rec}
+    _write_json(os.path.join(EXPERIMENTS, f"{eid}.json"), rec)
+    return eid
+
+
+def _scores(texts, prompt, measure):
+    script = exm.dominant_script(prompt)
+    return [exm.score(measure, t) for t in texts], [exm.script_mix(t, script) for t in texts]
+
+
+def _chat_summary(b, cfg, n, temp, seed, max_new, rows, msgs, texts, ids):
+    """Per column: the measure, coherence and script mix over its n samples, and each pushed column against the
+    unsteered one, paired by seed. Saves the run."""
+    measure, dose, mode = b["measure"], float(b["dose"]), b.get("mode", "add")
+    coh = dict(zip(rows, rt.reply_logprob([msgs[x] for x in rows], [ids.get(x, []) for x in rows])))
+    B, bs = cfg["bootstrap"], cfg["bootstrap_seed"]
+    labels = [f"×{dose:g}", "×1", f"×−{dose:g}"] if mode == "mul" else [f"+{dose:g}", "0", f"−{dose:g}"]
+    cols, raw = [], []
+    for c in range(3):
+        t = [texts.get((c, i), "") for i in range(n)]
+        m, sm = _scores(t, b["prompt"], measure)
+        raw.append({"label": labels[c], "texts": t, "measure": m, "coherence": [coh[(c, i)] for i in range(n)],
+                    "script": sm})
+    for c, r in enumerate(raw):
+        col = {"label": r["label"], "measure": exm.summary(r["measure"], B, bs),
+               "coherence": exm.summary(r["coherence"], B, bs), "script": exm.summary(r["script"], B, bs),
+               "scores": r["measure"], "coh_scores": r["coherence"]}
+        if c != 1:
+            p = exm.paired(r["measure"], raw[1]["measure"], B, bs)
+            col["vs0"] = {**p, "sentence": exm.sentence(r["label"], measure, p)}
+            col["coh_vs0"] = exm.paired(r["coherence"], raw[1]["coherence"], B, bs)
+        cols.append(col)
+    out = {"columns": cols, "n": n, "warn": n < cfg["warn_n"], "device": rt.dev, "reproducible": rt.dev != "mps"}
+    out["id"] = _save_experiment("chat", {
+        "layer": int(b["layer"]), "neurons": [{"layer": int(b["layer"]), "n": int(b["n"])}], "action": "steer",
+        "mode": mode, "doses": [dose, 0, -dose] if mode == "add" else [dose, 1, -dose],
+        "seeds": [seed + i for i in range(n)], "n": n, "temperature": temp, "max_tokens": max_new,
+        "prompt": b["prompt"], "history": b.get("history", []), "measures": [measure, "coherence", "script mix"],
+        "raw": raw, "summary": exm.finite(cols), "prediction": b.get("prediction"), "verdict": None})
+    return exm.finite(out)
+
+
+@app.get("/api/experiment/config")
+def experiment_config():
+    cfg = exm.config()
+    dev = getattr(rt, "dev", None)
+    return {**cfg, "measures": _read_json(MEASURES, cfg["measures"]), "device": dev,
+            "reproducible": None if dev is None else dev != "mps"}
+
+
+@app.post("/api/experiment/measures")
+async def experiment_measures(req: Request):
+    """Replaces the saved measure presets; each is checked by scoring an empty reply."""
+    ms = (await req.json())["measures"]
+    for m in ms:
+        if not str(m.get("name", "")).strip():
+            return {"error": "every measure needs a name"}
+        try:
+            exm.score(m, "")
+        except Exception as e:
+            return {"error": f"{m['name']}: {e}"}
+    _write_json(MEASURES, ms)
+    return {"ok": True, "measures": ms}
+
+
+@app.get("/api/experiment/windows")
+def experiment_windows():
+    return _read_json(WINDOWS, {})
+
+
+@app.post("/api/experiment/sweep")
+async def experiment_sweep(req: Request):
+    """Starts a dose sweep as a background job: the neuron pushed (add) at each dose of the grid, `samples` paired
+    samples per dose, scored with the measure plus coherence and script mix. Progress at /api/experiment/events."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    import uuid
+    cfg = exm.config()
+    job = {"id": uuid.uuid4().hex[:12], "events": [], "cancel": threading.Event(), "done": False}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_sweep, args=(job, b, cfg), daemon=True).start()
+    return {"id": job["id"]}
+
+
+def _run_sweep(job, b, cfg):
+    import time
+    emit = job["events"].append
+    try:
+        layer, neuron, measure, prompt = int(b["layer"]), int(b["n"]), b["measure"], b["prompt"]
+        n = builtins.max(1, builtins.min(32, int(b.get("samples", cfg["n"]))))
+        temp, seed, max_new = float(b.get("temperature", cfg["temperature"])), int(b.get("seed", cfg["seed"])), \
+            int(b.get("max_new", cfg["max_new"]))
+        doses = sorted({float(d) for d in b.get("doses", cfg["sweep_doses"])} | {0.0}, key=lambda d: (abs(d), d))
+        rows = [(d, i) for d in doses for i in range(n)]
+        msgs = [{"role": "user", "content": prompt}]
+        texts, coh, pts, raw = {}, {}, {}, {}
+        B, bs = cfg["bootstrap"], cfg["bootstrap_seed"]
+        emit({"start": True, "doses": doses, "n": n, "total": len(rows), "device": None})
+        rt.ensure_loaded()
+        emit({"device": rt.dev, "reproducible": rt.dev != "mps"})
+        t0, per = time.time(), builtins.max(1, cfg["max_batch"])
+        for k in range(0, len(rows), per):
+            if job["cancel"].is_set():
+                break
+            chunk = rows[k:k + per]
+            with rt.lock:
+                push = [rt.push_rows(layer, neuron, "add", [d for d, _ in chunk])]
+            ids = None
+            text = {x: "" for x in chunk}
+            for r, delta in rt.generate(push, [msgs] * len(chunk), max_new, job["cancel"],
+                                        [seed + i for _, i in chunk], temp):
+                if r is None:
+                    ids = delta
+                else:
+                    text[chunk[r]] += delta
+            if job["cancel"].is_set() or ids is None:
+                break
+            texts.update(text)
+            coh.update(zip(chunk, rt.reply_logprob([msgs] * len(chunk), ids)))
+            done = k + len(chunk)
+            eta = (time.time() - t0) / done * (len(rows) - done)
+            for d in dict.fromkeys(d for d, _ in chunk):
+                if not all((d, i) in texts for i in range(n)):
+                    continue
+                t = [texts[(d, i)] for i in range(n)]
+                m, sm = _scores(t, prompt, measure)
+                raw[d] = {"texts": t, "measure": m, "coherence": [coh[(d, i)] for i in range(n)], "script": sm}
+                pt = {"dose": d, "measure": exm.summary(m, B, bs), "coherence": exm.summary(raw[d]["coherence"], B, bs),
+                      "script": exm.summary(sm, B, bs)}
+                if 0.0 in raw and d != 0:
+                    pt["vs0"] = exm.paired(m, raw[0.0]["measure"], B, bs)
+                    pt["vs0"]["sentence"] = exm.sentence(f"{d:+g}", measure, pt["vs0"])
+                pts[d] = pt
+                emit(exm.finite({"point": pt}))
+            emit({"progress": {"done": done, "total": len(rows), "eta": round(eta, 1)}})
+        cancelled = job["cancel"].is_set()
+        win = exm.window(raw, cfg["toxic"]) if not cancelled and 0.0 in raw and len(raw) > 1 else None
+        eid = _save_experiment("sweep", {
+            "layer": layer, "neurons": [{"layer": layer, "n": neuron}], "action": "steer", "mode": "add",
+            "doses": doses, "seeds": [seed + i for i in range(n)], "n": n, "temperature": temp, "max_tokens": max_new,
+            "prompt": prompt, "measures": [measure, "coherence", "script mix"], "toxic": cfg["toxic"],
+            "raw": {str(d): r for d, r in raw.items()}, "summary": [pts[d] for d in doses if d in pts],
+            "window": win, "cancelled": cancelled, "prediction": b.get("prediction"), "verdict": None})
+        if win:
+            ws = _read_json(WINDOWS, {})
+            ws.setdefault(f"L{layer}/N{neuron}", {})[measure["name"]] = {
+                "window": win, "index": exm.best_index(win), "experiment": eid, "prompt": prompt}
+            _write_json(WINDOWS, ws)
+        emit(exm.finite({"end": True, "id": eid, "window": win, "index": exm.best_index(win) if win else None,
+                         "cancelled": cancelled}))
+    except Exception as e:
+        emit({"error": repr(e)})
+        emit({"end": True, "cancelled": True})
+    finally:
+        job["done"] = True
+
+
+@app.get("/api/experiment/events")
+async def experiment_events(id: str, req: Request, since: int = 0):
+    job = _jobs.get(id)
+    if job is None:
+        return JSONResponse({"error": "no such job"}, status_code=404)
+
+    async def events():
+        i = since
+        while True:
+            while i < len(job["events"]):
+                yield f"data: {json.dumps(job['events'][i])}\n\n"
+                i += 1
+            if job["done"] and i >= len(job["events"]):
+                break
+            if await req.is_disconnected():
+                break
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/api/experiment/cancel")
+async def experiment_cancel(req: Request):
+    job = _jobs.get((await req.json())["id"])
+    if job:
+        job["cancel"].set()
+    return {"ok": job is not None}
 
 
 LENS_INDEX = os.path.join(ROOT, "explorer", "cache", "lens_index.npz")

@@ -424,6 +424,120 @@ def experiment_windows():
     return _read_json(WINDOWS, {})
 
 
+# ---------- tuning curves: a stimulus set run once through the model, every neuron's response per item ----------
+STIMULI = os.path.join(EXPERIMENTS, "stimuli.json")
+TUNING = os.path.join(EXPERIMENTS, "tuning")
+
+
+def _stimulus_sets():
+    return _read_json(STIMULI, exm.config()["stimuli"])
+
+
+def _set_key(st):
+    import hashlib
+    body = json.dumps([st.get("template") or "", [[i["text"], i["category"]] for i in st["items"]]])
+    return hashlib.sha1(body.encode()).hexdigest()[:12]
+
+
+def _tuning(st):
+    """The cached responses of a stimulus set, or None: R [items, layers, neurons] (float32)."""
+    path = os.path.join(TUNING, _set_key(st) + ".npz")
+    return np.load(path)["R"].astype(np.float32) if os.path.exists(path) else None
+
+
+def _item_text(template, item):
+    """The item in its template, with the item's character span. An item at the very start gets a short prefix:
+    position 0 is the attention-sink token, whose scores are zeroed."""
+    t = (template or "").strip() or "{item}"
+    if t.startswith("{item}"):
+        t = "About: " + t
+    at = t.index("{item}")
+    return t.replace("{item}", item, 1), (at, at + len(item))
+
+
+@app.get("/api/tuning/sets")
+def tuning_sets():
+    return {"sets": [{**st, "ready": os.path.exists(os.path.join(TUNING, _set_key(st) + ".npz"))} for st in _stimulus_sets()]}
+
+
+@app.post("/api/tuning/sets")
+async def tuning_sets_save(req: Request):
+    """Replaces the saved stimulus sets. Each needs a name and at least two items in at least two categories."""
+    sets = (await req.json())["sets"]
+    for st in sets:
+        items = [i for i in st.get("items", []) if str(i.get("text", "")).strip()]
+        if not str(st.get("name", "")).strip():
+            return {"error": "every stimulus set needs a name"}
+        if len(items) < 2 or len({i.get("category", "") for i in items}) < 2:
+            return {"error": f"{st['name']}: needs items in at least two categories"}
+        if st.get("template") and "{item}" not in st["template"]:
+            return {"error": f"{st['name']}: the template needs {{item}}"}
+        st["items"] = [{"text": i["text"].strip(), "category": str(i.get("category", "")).strip() or "other"} for i in items]
+    _write_json(STIMULI, sets)
+    return tuning_sets()
+
+
+@app.post("/api/tuning/run")
+async def tuning_run(req: Request):
+    """Runs every item of a stimulus set through the model once; each neuron's response to an item is its max
+    |activation ÷ typical extreme| over the item's own tokens. Cached in experiments/tuning/ by the set's content."""
+    name = (await req.json())["set"]
+    st = next((s for s in _stimulus_sets() if s["name"] == name), None)
+    if st is None:
+        return {"error": f"no stimulus set {name!r}"}
+    if off := _live_off():
+        return off
+    if _tuning(st) is None:
+        await asyncio.to_thread(rt.ensure_loaded)
+        R = []
+        for it in st["items"]:
+            text, (a, b) = _item_text(st.get("template"), it["text"])
+            offs = rt.tok(text, return_offsets_mapping=True)["offset_mapping"]
+            pos = [i for i, (x, y) in enumerate(offs) if y > a and x < b and i > 0]
+            _, _, score = await score_text(text)
+            R.append(np.abs(score[:, pos, :]).max(1))
+        os.makedirs(TUNING, exist_ok=True)
+        np.savez(os.path.join(TUNING, _set_key(st) + ".npz"), R=np.stack(R).astype(np.float16),
+                 items=[i["text"] for i in st["items"]], cats=[i["category"] for i in st["items"]], name=st["name"])
+    return {"ok": True, "set": st["name"]}
+
+
+def _selectivity(st, R):
+    """Item selectivity index and category d' (for every category against the rest) per neuron: [layers, neurons]."""
+    cats = [i["category"] for i in st["items"]]
+    return exm.item_selectivity(R), {c: exm.category_d(R, cats, c) for c in dict.fromkeys(cats)}
+
+
+@app.get("/api/tuning/neuron")
+def tuning_neuron(layer: int, n: int, set: str):
+    """One neuron's tuning curve: its response per item, with both selectivity scores."""
+    st = next((s for s in _stimulus_sets() if s["name"] == set), None)
+    R = _tuning(st) if st else None
+    if R is None:
+        return {"ready": False}
+    r = R[:, layer, n]
+    si, ds = _selectivity(st, r[:, None])
+    return {"ready": True, "items": [{**it, "r": round(float(v), 3)} for it, v in zip(st["items"], r)],
+            "si": round(float(si[0]), 3), "d": {c: round(float(v[0]), 3) for c, v in ds.items()}}
+
+
+@app.get("/api/tuning/scores")
+def tuning_scores(layer: int, set: str, category: str = "", top: int = 300):
+    """Every neuron of a layer: item selectivity and category d' (for `category`, else the set's first category), plus
+    the layer's top neurons by each with their lens tokens, so the list can rank neurons that were never swept."""
+    st = next((s for s in _stimulus_sets() if s["name"] == set), None)
+    R = _tuning(st) if st else None
+    if R is None:
+        return {"ready": False}
+    si, ds = _selectivity(st, R[:, layer, :])
+    cat = category if category in ds else next(iter(ds))
+    idx, vocab, nm = lens_index(), rt.vocab_strings(), names()
+    row = lambda n: {"n": int(n), "name": nm.get(f"L{layer}/N{n}", ""),
+                     "lens": [vocab[t] for t in idx["up"][layer, n, :5]] if idx is not None else []}
+    return {"ready": True, "category": cat, "si": np.round(si, 3).tolist(), "d": np.round(ds[cat], 3).tolist(),
+            "top_si": [row(n) for n in np.argsort(-si)[:top]], "top_d": [row(n) for n in np.argsort(-ds[cat])[:top]]}
+
+
 @app.post("/api/experiment/sweep")
 async def experiment_sweep(req: Request):
     """Starts a dose sweep as a background job: the neuron pushed (add) at each dose of the grid, `samples` paired

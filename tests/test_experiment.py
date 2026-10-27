@@ -125,3 +125,32 @@ def test_window_script_mix_is_toxic():
     pts[1.0]["script"] = [0.5] * 8
     w = ex.window(pts, {"coherence_drop": 1.0, "script_mix": 0.2})
     assert w["positive"]["td"] == 1.0
+
+
+# ---------- tuning curves ----------
+def test_item_selectivity():
+    assert ex.item_selectivity([1.0, 1.0, 1.0]) == pytest.approx(0)  # flat
+    assert ex.item_selectivity([2.0, 0, 0]) == pytest.approx(1)  # one item only
+    assert ex.item_selectivity([3.0, 1.0, 1.0]) == pytest.approx((3 - 1) / (3 + 1))
+    assert ex.item_selectivity([0.0, 0.0]) == 0
+    r = np.array([[3.0, 1.0], [1.0, 1.0], [1.0, 1.0]])  # vectorized over neurons
+    assert ex.item_selectivity(r) == pytest.approx([0.5, 0.0])
+
+
+def test_category_d_known_value():
+    cats = ["food"] * 3 + ["other"] * 3
+    r = np.array([5.0, 6, 7, 1, 2, 3])
+    sd = np.sqrt((2 * 1.0 + 2 * 1.0) / 4)
+    assert ex.category_d(r, cats, "food") == pytest.approx(4 / sd)
+    assert ex.category_d(r, cats, "other") == pytest.approx(-4 / sd)
+
+
+def test_food_vs_pizza_neuron():
+    """A food neuron: high category d', low item selectivity. A pizza neuron: both high."""
+    items = ["pizza", "burger", "sushi", "salad", "car", "dog", "chair", "river"]
+    cats = ["food"] * 4 + ["other"] * 4
+    food = np.array([5.0, 5.2, 4.8, 5.1, 1.0, 1.1, 0.9, 1.0])
+    pizza = np.array([8.0, 1.6, 1.4, 1.5, 0.5, 0.6, 0.4, 0.5])
+    assert ex.category_d(food, cats, "food") > 5 and ex.item_selectivity(food) < 0.4
+    assert ex.category_d(pizza, cats, "food") > 0.8 and ex.item_selectivity(pizza) > 0.7
+    assert items[int(pizza.argmax())] == "pizza"

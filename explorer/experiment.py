@@ -198,3 +198,30 @@ def finite(x):
     if isinstance(x, (list, tuple)):
         return [finite(v) for v in x]
     return x
+
+
+# ---------- tuning curves ----------
+def item_selectivity(r):
+    """(r_max - r_others) / (r_max + r_others) over items (axis 0), r_others the mean of every other item: 0 for a
+    flat response, 1 for one item only. r: [items, ...] responses >= 0; 0 where every response is 0."""
+    r = np.asarray(r, float)
+    mx = r.max(0)
+    others = (r.sum(0) - mx) / max(len(r) - 1, 1)
+    den = mx + others
+    return np.where(den > 0, (mx - others) / np.where(den > 0, den, 1), 0.0)
+
+
+def category_d(r, cats, cat):
+    """d' of category `cat` against the rest: (mean_cat - mean_rest) / pooled SD, over items (axis 0). None-safe:
+    0 where both groups are constant and equal; inf-free (a zero pooled SD with a difference gives a large finite
+    value capped at 99)."""
+    r, cats = np.asarray(r, float), np.asarray(cats)
+    a, b = r[cats == cat], r[cats != cat]
+    if len(a) < 1 or len(b) < 1:
+        raise ValueError("a category d' needs items in and outside the category")
+    va = a.var(0, ddof=1) if len(a) > 1 else np.zeros(a.shape[1:])
+    vb = b.var(0, ddof=1) if len(b) > 1 else np.zeros(b.shape[1:])
+    dof = max(len(a) + len(b) - 2, 1)
+    sd = np.sqrt(((len(a) - 1) * va + (len(b) - 1) * vb) / dof)
+    diff = a.mean(0) - b.mean(0)
+    return np.where(sd > 0, diff / np.where(sd > 0, sd, 1), np.clip(diff * 1e9, -99, 99))

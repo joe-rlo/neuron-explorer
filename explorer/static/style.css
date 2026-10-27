@@ -405,3 +405,20 @@ tr.con .logit .tok { font-size: 10.5px; }
 #tour-card p { margin: 6px 0 10px; color: var(--dim); }
 #tour-card .row { display: flex; gap: 10px; justify-content: flex-end; }
 #tour-card button[data-t="next"] { background: var(--raise); padding: 3px 12px; border-radius: 4px; }
+
+/* tuning curves */
+#tab-tuning.on { overflow-y: auto; }
+#t-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+#t-controls select { padding: 3px 6px; font-size: 12px; max-width: 14em; }
+#t-controls .xgap { flex: 1; }
+#t-editor { margin-bottom: 10px; padding: 8px; background: var(--raise); border-radius: 4px; display: grid; gap: 6px; }
+#t-editor[hidden] { display: none; }
+#t-editor .row { display: flex; gap: 8px; align-items: center; }
+#t-editor input { flex: 1; min-width: 0; }
+#t-editor textarea { width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.3); border: 0; border-radius: 4px; padding: 6px 8px; color: inherit; font: 12px var(--mono); resize: vertical; }
+#t-editor #te-msg { font-size: 12px; }
+#t-editor #te-close { margin-left: auto; }
+.xbtn { background: var(--raise); padding: 4px 12px; border-radius: 4px; margin-top: 10px; }
+.tlegend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); margin: 4px 0 10px; }
+.tlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+.tstats > div { grid-template-columns: minmax(0, 10.5em) 1fr; }

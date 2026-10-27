@@ -457,11 +457,20 @@ function renderList() {
   const mName = currentMeasure()?.name, byWin = $("#sort").value === "window";
   const wi = u => u.kind === "neuron" && mName ? windowOf(state.layer, u.n, mName)?.index ?? null : null;
   if (byWin) units = units.map(u => [u, wi(u)]).sort((a, b) => (b[1] ?? -Infinity) - (a[1] ?? -Infinity)).map(x => x[0]);
+  // item selectivity / category d' from the chosen stimulus set (fetched per layer, then the list redraws)
+  const tk = $("#sort").value === "si" ? "si" : $("#sort").value === "dprime" ? "d" : null, ts = tk && tuneScores(state.layer);
+  const tv = u => u.kind === "neuron" && ts ? ts[tk][u.n] : null;
+  // ranked over every neuron of the layer, not only the swept ones: the swept unit's words where there is one, else
+  // the neuron's lens tokens
+  if (tk && ts) units = ts[tk === "si" ? "top_si" : "top_d"].map(r => state.unitMap[state.layer]?.get(r.n) || { kind: "neuron", n: r.n, name: r.name, words: r.lens, z: 0 })
+    .filter(u => !q || u.words.some(w => w.toLowerCase().includes(q)) || u.name.toLowerCase().includes(q) || String(u.n) === q);
+  else if (tk) units = [];
   const rnd = (state.units[state.layer] || []).filter(u => u.kind === "random").map(u => u.z);
   const floor = rnd.length ? Math.max(...rnd) : -Infinity;
   const ol = $("#rows");
-  ol.innerHTML = units.slice(0, 600).map(u => `<li data-n="${u.n}" data-kind="${u.kind}" class="${u.kind}${u.z <= floor ? " below" : ""}${state.focus && state.focus.n === u.n && state.focus.layer === state.layer && u.kind === "neuron" ? " sel" : ""}">
-    <span class="n">${u.kind === "random" ? "r" : "N"}${u.n}</span><span class="z">${byWin ? (wi(u) == null ? "—" : num(wi(u))) : u.z.toFixed(1)}</span>
+  if (tk && !tuneSet()?.ready) { ol.innerHTML = `<li class="head">run a stimulus set on a neuron's Tuning tab to sort by ${tk === "si" ? "item selectivity" : "category d'"}</li>`; return; }
+  ol.innerHTML = (tk && ts ? `<li class="head">${tk === "si" ? "item selectivity" : `d' for ${esc(ts.category)}`} · ${esc(tuneSet().name)} · all neurons of L${state.layer}</li>` : "") + units.slice(0, 600).map(u => `<li data-n="${u.n}" data-kind="${u.kind}" class="${u.kind}${u.z <= floor ? " below" : ""}${state.focus && state.focus.n === u.n && state.focus.layer === state.layer && u.kind === "neuron" ? " sel" : ""}">
+    <span class="n">${u.kind === "random" ? "r" : "N"}${u.n}</span><span class="z">${byWin ? (wi(u) == null ? "—" : num(wi(u))) : tk ? (tv(u) == null ? "—" : num(tv(u))) : u.z.toFixed(1)}</span>
     <span class="w">${u.name ? `<b>${esc(u.name)}</b> ` : ""}${esc(u.words.join(" "))}</span></li>`).join("");
 }
 // lens hits (net tab) or what fired (run tab)
@@ -579,6 +588,7 @@ function markFresh(t) { if (curTab() !== t) tabBtn(t).classList.add("fresh"); }
 function syncTabs() {
   const f = state.focus?.kind === "head" ? null : state.focus;
   for (const t of ["examples", "details"]) tabBtn(t).style.display = f ? "" : "none";
+  tabBtn("tuning").style.display = f && f.kind === "neuron" ? "" : "none";
   tabBtn("chat").style.display = f && f.kind === "neuron" ? "" : "none";
   if (tabBtn(curTab()).style.display === "none") setTab(f ? "examples" : "claude");
 }
@@ -622,6 +632,7 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   if (u.stats) $("#f-rank").textContent = `#${u.rank ?? "—"}/${u.n_ranked}  mass ${(u.stats.mass ?? u.stats.z).toFixed(1)}  null ${(u.stats.null_pct * 100).toFixed(0)}%`;
   renderExamples(u);
   renderDetails(u);
+  if (kind === "neuron") renderTuning();
   const hasRollouts = !!(u.rollouts && u.rollouts.length);
   document.querySelector('#tabs button[data-tab="examples"]').style.display = hasRollouts ? "" : "none";
   if (!hasRollouts && document.querySelector("#tabs button.on")?.dataset.tab === "examples") setTab("details");
@@ -1149,6 +1160,109 @@ function renderWindow() {
   el.innerHTML = w ? `${windowHTML(w.window, m.name)}<div class="xnote dim">from a dose sweep on “${esc(w.prompt)}”</div>` : "";
 }
 
+// ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
+const T = { sets: [], scores: {}, pending: new Set(), running: false };
+const tuneSet = () => T.sets.find(s => s.name === $("#t-set").value) || T.sets[0] || null;
+const tuneCat = () => $("#t-cat").value;
+async function loadTuning(pick) {
+  try { T.sets = (await api("/api/tuning/sets")).sets; } catch { return; }
+  let saved = pick ?? null; if (saved == null) try { saved = localStorage.getItem("ne.tset"); } catch {}
+  $("#t-set").innerHTML = T.sets.map(s => `<option>${esc(s.name)}</option>`).join("");
+  if (T.sets.some(s => s.name === saved)) $("#t-set").value = saved;
+  setCats(); T.scores = {}; renderTuning();
+}
+function setCats() {
+  const st = tuneSet(), cats = st ? [...new Set(st.items.map(i => i.category))] : [], keep = $("#t-cat").value;
+  $("#t-cat").innerHTML = cats.map(c => `<option>${esc(c)}</option>`).join("");
+  if (cats.includes(keep)) $("#t-cat").value = keep;
+}
+$("#t-set").onchange = () => { try { localStorage.setItem("ne.tset", $("#t-set").value); } catch {} setCats(); T.scores = {}; renderTuning(); if (["si", "dprime"].includes($("#sort").value)) renderList(); };
+$("#t-cat").onchange = () => { T.scores = {}; renderTuning(); if ($("#sort").value === "dprime") renderList(); };
+// a layer's scores for the list sort; null until fetched (the list redraws when they arrive)
+function tuneScores(layer) {
+  const st = tuneSet(); if (!st?.ready) return null;
+  const key = `${st.name}/${tuneCat()}/${layer}`;
+  if (T.scores[key]) return T.scores[key];
+  if (!T.pending.has(key)) {
+    T.pending.add(key);
+    api(`/api/tuning/scores?layer=${layer}&set=${encodeURIComponent(st.name)}&category=${encodeURIComponent(tuneCat())}`)
+      .then(r => { if (r.ready) { T.scores[key] = r; if (state.layer === layer) renderList(); } }).finally(() => T.pending.delete(key));
+  }
+  return null;
+}
+const CAT_COLORS = ["var(--up)", "var(--link)", "var(--down)", "#73ff8c", "#b399ff", "#e0e0e0"];
+async function renderTuning() {
+  const el = $("#t-body"), f = state.focus, st = tuneSet();
+  if (!el || !f || f.kind !== "neuron") return;
+  if (!st) { el.innerHTML = `<div class="xnote dim">No stimulus sets. Press edit to make one.</div>`; return; }
+  if (!st.ready) {
+    el.innerHTML = `<div class="xnote">“${esc(st.name)}” hasn't been run yet. Running it passes each of its ${st.items.length} items through the model once (no generation) and scores every neuron at the same time.</div>
+      <button type="button" id="t-run" class="xbtn">${T.running ? "running…" : "run this set"}</button>`;
+    return;
+  }
+  const r = await api(`/api/tuning/neuron?layer=${f.layer}&n=${f.n}&set=${encodeURIComponent(st.name)}`).catch(() => null);
+  if (!r?.ready || !isFocus(f.layer, f.n, "neuron") || tuneSet() !== st) return;
+  const cats = [...new Set(r.items.map(i => i.category))], col = c => CAT_COLORS[cats.indexOf(c) % CAT_COLORS.length];
+  const items = cats.flatMap(c => r.items.filter(i => i.category === c));  // grouped by category
+  const W = 560, H = 190, L = 34, B = 54, bw = (W - L - 8) / items.length, top = Math.max(1e-6, ...items.map(i => i.r));
+  const Y = v => 10 + (H - B - 10) * (1 - v / top);
+  const bars = items.map((it, k) => `<rect x="${L + k * bw + 2}" y="${Y(it.r)}" width="${bw - 4}" height="${H - B - Y(it.r)}" fill="${col(it.category)}"><title>${esc(it.text)}: ${num(it.r)}</title></rect>
+    <text class="tk" transform="translate(${L + k * bw + bw / 2 + 3},${H - B + 8}) rotate(50)">${esc(it.text)}</text>`).join("");
+  const cat = cats.includes(tuneCat()) ? tuneCat() : cats[0], d = r.d[cat];
+  el.innerHTML = `<svg class="xplot" viewBox="0 0 ${W} ${H}" role="img" aria-label="tuning curve">
+      <line class="ax" x1="${L}" x2="${W - 4}" y1="${H - B}" y2="${H - B}"/><text class="tk" x="${L - 6}" y="${Y(top) + 4}" text-anchor="end">${num(top)}</text><text class="tk" x="${L - 6}" y="${H - B + 4}" text-anchor="end">0</text>${bars}</svg>
+    <div class="xnote dim">bar: the neuron's strongest |activation ÷ typical extreme| on the item's own tokens${st.template ? ` in “${esc(st.template)}”` : ""}</div>
+    <div class="tlegend">${cats.map(c => `<span><i style="background:${col(c)}"></i>${esc(c)}</span>`).join("")}</div>
+    <div class="xs tstats"><div title="(r_max − r_others) ÷ (r_max + r_others), r_others the mean of every other item"><span class="k">item selectivity</span><span>${num(r.si)}<span class="ci">0 responds evenly to every item, 1 to one item only${r.si > 0.5 ? ` (here: ${esc(r.items.reduce((a, b) => b.r > a.r ? b : a).text)})` : ""}</span></span></div>
+      <div title="(mean on ${esc(cat)} − mean on the rest) ÷ pooled SD"><span class="k">d' ${esc(cat)}</span><span>${num(d)}<span class="ci">how far above the other items ${esc(cat)} items sit, in SDs (0.8 is large)</span></span></div></div>
+    <div class="xline">${esc(tuneReading(r.si, d, cat))}</div>`;
+}
+function tuneReading(si, d, cat) {
+  if (d > 0.8 && si > 0.5) return `Responds to ${cat} and to one item well above the rest: item-selective as well as category-selective.`;
+  if (d > 0.8) return `Responds to ${cat} items generally (a category response) without singling out one item.`;
+  if (si > 0.5) return `Singles out one item, but not ${cat} as a category.`;
+  return `No clear preference for ${cat} or for any one item in this set.`;
+}
+$("#t-body").addEventListener("click", async e => {
+  if (!e.target.closest("#t-run") || T.running) return;
+  const st = tuneSet(); T.running = true; renderTuning();
+  const r = await api("/api/tuning/run", { set: st.name }).catch(err => ({ error: err.message }));
+  T.running = false;
+  if (r.error) { $("#t-body").innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
+  loadTuning(st.name);
+  if (["si", "dprime"].includes($("#sort").value)) renderList();
+});
+// the stimulus set editor: name, optional template with {item}, one "item, category" per line
+function renderTuneEditor(st = tuneSet() || { name: "", template: "Let's talk about {item}.", items: [] }) {
+  $("#t-editor").innerHTML = `<div class="row"><input id="te-name" placeholder="set name" value="${esc(st.name)}" spellcheck="false"><input id="te-tpl" placeholder="template, e.g. Let's talk about {item}." value="${esc(st.template || "")}" spellcheck="false"></div>
+    <textarea id="te-items" rows="6" spellcheck="false" placeholder="one per line: item, category">${esc(st.items.map(i => `${i.text}, ${i.category}`).join("\n"))}</textarea>
+    <div class="row"><button type="button" id="te-save">save</button><button type="button" id="te-new" class="dim">new</button><button type="button" id="te-del" class="dim">delete</button><span id="te-msg" class="dim"></span><button type="button" id="te-close" class="dim">close</button></div>`;
+  $("#t-editor").dataset.orig = st.name;
+}
+async function saveSets(sets, pick) {
+  const r = await api("/api/tuning/sets", { sets }).catch(err => ({ error: err.message }));
+  if (r.error) { $("#te-msg").textContent = r.error; return; }
+  await loadTuning(pick); renderTuneEditor();
+}
+$("#t-editor").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const orig = $("#t-editor").dataset.orig, strip = s => ({ name: s.name, template: s.template, items: s.items });
+  if (b.id === "te-close") $("#t-editor").hidden = true;
+  if (b.id === "te-new") renderTuneEditor({ name: "", template: "Let's talk about {item}.", items: [] });
+  if (b.id === "te-del") saveSets(T.sets.filter(s => s.name !== orig).map(strip), "");
+  if (b.id === "te-save") {
+    const name = $("#te-name").value.trim();
+    if (!name) { $("#te-msg").textContent = "name it first"; return; }
+    const items = $("#te-items").value.split("\n").map(l => l.split(",")).filter(p => p[0].trim())
+      .map(([t, ...c]) => ({ text: t.trim(), category: c.join(",").trim() || "other" }));
+    const st = { name, template: $("#te-tpl").value.trim(), items };
+    const list = T.sets.filter(s => s.name !== orig && s.name !== name).map(strip), at = T.sets.findIndex(s => s.name === orig);
+    list.splice(at < 0 ? list.length : Math.min(at, list.length), 0, st);
+    saveSets(list, name);
+  }
+});
+$("#t-edit").onclick = () => { const ed = $("#t-editor"); ed.hidden = !ed.hidden; if (!ed.hidden) renderTuneEditor(); };
+
 async function runReads(f, text) {
   if (reading) return;
   reading = true; $("#c-go").textContent = "…";
@@ -1185,7 +1299,7 @@ window.__ne = { map, state, scatter };
 const have = Object.keys(index.layers).map(Number);
 let saved = null; try { const v = localStorage.getItem("ne.layer"); if (v !== null) saved = +v; } catch {}
 const first = have.includes(saved) ? saved : have.includes(22) ? 22 : (have[0] ?? 0);
-loadExperiments();
+loadExperiments(); loadTuning();
 await setLayer(first);
 if (location.hash) fromHash(); else restoreFocus();
 

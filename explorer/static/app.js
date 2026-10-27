@@ -188,7 +188,7 @@ function setView(v) {
 const layerSel = $("#layer");
 for (let l = 0; l < arch.n_layers; l++) {
   const o = document.createElement("option"); o.value = l;
-  o.textContent = `L${l}${index.layers[l] ? "" : " ·"}`;
+  o.textContent = `L${l}${index.layers[l] ? " ●" : ""}`;  // ● = has sweep rollouts
   layerSel.appendChild(o);
 }
 layerSel.onchange = () => { setLayer(+layerSel.value); map.enterLayer(+layerSel.value); };
@@ -465,7 +465,10 @@ function renderResults(r, ol) {
     <span class="n">L${x.layer} N${x.n}</span><span class="sg ${x.sign === "+" ? "up" : "down"}">${r.fires ? `${x.sign === "+" ? "" : "−"}${x.score.toFixed(1)}×` : `${x.sign === "+" ? "+" : "−"}${x.rank + 1}`}</span>
     <span class="w">${r.fires ? `<span class="tk">"${esc(x.token)}"</span>` : ""}${x.name ? `<b>${esc(x.name)}</b> ` : ""}${esc(x.lens.join(" "))}</span></li>`).join("");
   const head = r.fires ? `${r.total ?? 0} neurons pass · score = activation ÷ its typical extreme` : `${r.total ?? 0} neurons · ${r.tokens ?? 0} tokens`;
-  ol.innerHTML = `<li class="head">${head}</li>` + rows;
+  // both signs are strong responses; the sign is only the direction
+  const why = r.fires ? "−2× is as strong as +2×: the neuron fires negatively instead. The sign shows direction, not strength."
+    : "+n: the token ranks nth among what this neuron pushes toward; −n: nth among what it pushes away from. Both mean a strong link; the sign shows direction.";
+  ol.innerHTML = `<li class="head">${head}<div class="why">${why}</div></li>` + rows;
 }
 // a head chip marks its head on the map while hovered
 $("#net").addEventListener("mouseover", e => { const c = e.target.closest(".chip[data-h]"); map.hoverHead(c ? +c.dataset.l : null, c ? +c.dataset.h : null); });

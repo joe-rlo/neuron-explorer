@@ -16,14 +16,14 @@
 <body>
 <header>
   <nav id="views">
-    <button data-view="map" class="on">map</button>
-    <button data-view="embed">embeddings</button>
+    <button data-view="map" class="on" title="the model as a stack of 32 layer sheets, one dot per neuron">map</button>
+    <button data-view="embed" title="this layer's swept rollouts embedded in 2D, colored by neuron, prompt, dose or kind">embeddings</button>
   </nav>
-  <select id="layer" aria-label="layer"></select>
-  <span class="seg" id="layout-mode" title="sheet layout"><button data-k="index">index</button><button data-k="writes" class="on">writes</button></span>
-  <span class="seg" id="web-mode" title="connection web of the focused neuron: upstream and downstream cones; yellow links push the reader up, magenta push it down"><button data-w="off">no web</button><button data-w="on" class="on">web</button></span><input id="web-z" value="5" inputmode="numeric" aria-label="web top links" title="web: the open neuron's top links each way">
-  <input id="jump" placeholder="L22 N2742" aria-label="go to neuron" spellcheck="false">
-  <span class="seg" id="q-mode"><button data-q="lens" class="on">lens</button><button data-q="fires">fires</button></span>
+  <select id="layer" aria-label="layer" title="layer · ● marks layers with sweep rollouts (examples, word mass and the ranked list); other layers have the lens and connections only"></select>
+  <span class="seg" id="layout-mode"><button data-k="index" title="sheet layout: neurons in index order, N0 top left">index</button><button data-k="writes" class="on" title="sheet layout: neurons that write similar directions into the residual stream sit together">writes</button></span>
+  <span class="seg" id="web-mode" title="connection web of the focused neuron: upstream and downstream cones; yellow links push the reader up, magenta push it down"><button data-w="off" title="hide the open neuron's connection web">no web</button><button data-w="on" class="on" title="show the open neuron's connection web: what feeds it (upstream) and what it feeds (downstream)">web</button></span><input id="web-z" value="5" inputmode="numeric" aria-label="web top links" title="web: the open neuron's top links each way">
+  <input id="jump" placeholder="L22 N2742" aria-label="go to neuron" title="go to a neuron: type a layer and neuron, like L22 N2742, and press Enter" spellcheck="false">
+  <span class="seg" id="q-mode"><button data-q="lens" class="on" title="lens: find neurons whose lens has a token containing your text, i.e. neurons that push the model toward or away from it">lens</button><button data-q="fires" title="fires: run your text through the model and list the neurons that fire most on it">fires</button></span>
   <input id="lens-q" placeholder="search lens" aria-label="search" spellcheck="false" autocomplete="off">
   <span id="status" class="mono"></span>
 </header>
@@ -50,13 +50,13 @@
       <div class="id-line"><span id="f-id" class="mono"></span><span id="f-rank" class="mono dim"></span><button id="f-close" aria-label="close neuron">×</button></div>
       <textarea id="f-name" rows="1" placeholder="name" spellcheck="false" aria-label="feature name"></textarea>
     </div>
-    <nav id="ltabs"><button data-lt="net" class="on">net</button><button data-lt="run">run</button><button id="list-hide" class="edge" aria-label="hide list">‹</button></nav>
+    <nav id="ltabs"><button data-lt="net" class="on">net</button><button data-lt="run">run</button><button id="list-hide" class="edge" aria-label="hide list" title="hide the list panel">‹</button></nav>
     <div id="lt-net" class="lpane on">
       <div id="net"></div>
       <div id="list-head">
         <input id="filter" placeholder="filter" spellcheck="false" aria-label="filter by word or name">
         <label class="dim"><input type="checkbox" id="show-random"> random</label>
-        <select id="sort" class="dim" aria-label="sort list" title="mass: word-cluster mass against random controls · window: therapeutic index from dose sweeps with the chat's measure"><option value="mass">mass</option><option value="window">window</option></select>
+        <select id="sort" class="dim" aria-label="sort list" title="mass: how much the neuron's steered rollouts cluster on its top words, as a z-score against random controls · window: therapeutic index from dose sweeps with the chat's measure"><option value="mass">mass</option><option value="window">window</option></select>
       </div>
       <ol id="rows" class="rows"></ol>
     </div>
@@ -75,7 +75,7 @@
     </div>
   </aside>
 
-  <button id="list-tab" class="tab-edge left" aria-label="show list">›</button>
+  <button id="list-tab" class="tab-edge left" aria-label="show list" title="show the list panel">›</button>
   <button id="focus-tab" class="tab-edge right mono" aria-label="show neuron"></button>
   <aside id="focus" class="float">
     <nav id="tabs"><button data-tab="examples" class="on">Examples</button><button data-tab="chat">Chat</button><button data-tab="details">Details</button><button data-tab="claude">Claude</button><select id="a-agent" class="mono dim" title="agent for new conversations"><option value="claude">claude</option><option value="codex">codex</option></select><button id="a-past" class="mono dim" title="past conversations">past</button><button id="a-new" class="mono dim" title="start a new conversation">new</button><button id="f-collapse" class="edge" aria-label="collapse">›</button></nav>

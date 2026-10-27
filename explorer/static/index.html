@@ -33,6 +33,19 @@
     <canvas id="map"></canvas>
     <div id="layer-labels"></div>
     <button id="layer-back"></button>
+    <details id="legend">
+      <summary title="what the map's colors mean">legend</summary>
+      <div class="lg-sec">dots</div>
+      <div><i class="dot" style="background:#ffb547"></i>word mass above random controls (brighter is more), current layer</div>
+      <div><i class="dot" style="background:#334"></i>swept, but no more word mass than random controls</div>
+      <div><i class="dot" style="background:#fff"></i>named neuron, or the open one</div>
+      <div><i class="dot" style="background:#ffb547;box-shadow:0 0 6px #ffb547"></i><i class="dot" style="background:#ff4f9a;box-shadow:0 0 6px #ff4f9a"></i>search hits: + side (yellow) and − side (pink) of the lens, or firing up / down</div>
+      <div class="lg-sec">lines</div>
+      <div><i class="ln" style="background:#ffd133"></i>link where the writer pushes the reader up</div>
+      <div><i class="ln" style="background:#ff40d9"></i>link where the writer pushes the reader down</div>
+      <div><i class="ln" style="background:#66d9ff"></i>attention head links: v (what it moves) and o (what it writes)</div>
+      <div><i class="ln" style="background:#73ff8c"></i><i class="ln" style="background:#b399ff"></i>head q (where it looks from) and k (what it looks at)</div>
+    </details>
   </section>
   <section id="embed-view" class="view">
     <canvas id="scatter"></canvas>

@@ -173,6 +173,16 @@ tr.con .tok { font-size: 11.5px; }
 #layer-back.on { display: block; }
 #layer-back:hover { color: var(--ink); }
 body.list-hidden #layer-back { left: 56px; }
+#legend { position: fixed; bottom: 14px; left: 404px; z-index: 4; background: var(--panel); -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px); border-radius: 4px; padding: 5px 10px; font-size: 12px; color: var(--dim); max-width: 340px; }
+body.list-hidden #legend { left: 56px; }
+#legend summary { font: 12px var(--mono); cursor: pointer; list-style: none; }
+#legend summary::-webkit-details-marker { display: none; }
+#legend[open] summary { margin-bottom: 4px; color: var(--ink); }
+#legend > div { display: flex; align-items: center; gap: 6px; line-height: 1.7; }
+#legend .lg-sec { font: 11px var(--mono); color: var(--faint); margin-top: 4px; }
+#legend .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+#legend .ln { flex: none; width: 14px; height: 2px; }
 
 #c-lens { margin-bottom: 12px; font-size: 13.5px; line-height: 1.55; min-height: 2.6em; }
 #c-lens .sgn { display: inline-block; width: 1.1em; font-family: var(--mono); }

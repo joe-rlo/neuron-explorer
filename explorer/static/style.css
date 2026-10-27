@@ -28,6 +28,9 @@ header { position: fixed; inset: 0 0 auto 0; height: 44px; display: flex; align-
 #jump { width: 120px; font-family: var(--mono); }
 #web-z { width: 44px; font-family: var(--mono); }
 #status { margin-left: auto; color: var(--dim); font-size: 12px; }
+#jump-note { position: fixed; z-index: 20; background: #24292d; color: var(--ink); font-size: 12px; padding: 4px 9px;
+  border-radius: 4px; pointer-events: none; opacity: 0; transform: translateY(-3px); transition: opacity .2s, transform .2s; }
+#jump-note.on { opacity: 1; transform: none; }
 
 main, .view, canvas { position: absolute; inset: 0; }
 main { top: 44px; }  /* below the header, so the scene never draws behind its controls */

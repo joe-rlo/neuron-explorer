@@ -579,6 +579,13 @@ function openClaude() {
   focusEl.classList.add("on"); syncTabs(); setTab("claude"); setFocusCollapsed(false); $("#a-input").focus();
 }
 
+// opening a neuron on another layer moves the layer menu with it; a brief notice under the menu says so
+let jumpTimer;
+function jumpNotice(l) {
+  const el = $("#jump-note"), r = layerSel.getBoundingClientRect();
+  el.textContent = `Jumped to L${l}`; el.style.left = `${r.left}px`; el.style.top = `${r.bottom + 6}px`;
+  el.classList.add("on"); clearTimeout(jumpTimer); jumpTimer = setTimeout(() => el.classList.remove("on"), 2400);
+}
 async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   if (!agentSelecting) clearAgentMarks();
   flushName();
@@ -596,7 +603,7 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   $("#tab-examples").innerHTML = ""; $("#tab-details").innerHTML = "";
   state.thread = []; renderThread(); $("#c-reads").innerHTML = ""; $("#c-lens").innerHTML = "";
   syncTabs();
-  if (layer !== state.layer) await setLayer(layer);
+  if (layer !== state.layer) { if (state.layer != null) jumpNotice(layer); await setLayer(layer); }
   if (!isFocus(layer, n, kind)) return;
   setNameField(state.unitMap[layer]?.get(n)?.name || "");
   renderList();

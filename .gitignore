@@ -27,3 +27,6 @@ explorer/cache/head_profiles.json
 
 # experiment scripts
 scripts/
+
+# experiment mode output
+experiments/

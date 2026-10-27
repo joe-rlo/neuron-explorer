@@ -1,0 +1,17 @@
+{
+  "n": 8,
+  "temperature": 0.7,
+  "max_new": 200,
+  "seed": 0,
+  "bootstrap": 2000,
+  "bootstrap_seed": 0,
+  "warn_n": 5,
+  "max_batch": 24,
+  "sweep_doses": [-1.0, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1.0],
+  "quick": {"doses": [-0.5, 0, 0.5], "n": 4, "max_new": 80},
+  "toxic": {"coherence_drop": 1.0, "script_mix": 0.2},
+  "measures": [
+    {"name": "food words", "type": "words", "words": ["pizza", "pasta", "cheese", "dinner", "recipe"]},
+    {"name": "mentions pizza", "type": "contains", "word": "pizza"}
+  ]
+}

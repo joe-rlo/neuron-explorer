@@ -262,19 +262,25 @@ $("#inf-text").addEventListener("input", () => {
   if (state.qMode !== "fires") $('#q-mode button[data-q="fires"]').click();  // typing here means fires mode
   $("#lens-q").value = $("#inf-text").value; $("#lens-q").dispatchEvent(new Event("input"));
 });
+$("#inf-minus").addEventListener("input", () => {
+  if (state.qMode !== "fires" || $("#lens-q").value.trim().length < 2) return;
+  clearTimeout(lensTimer); lensTimer = setTimeout(runLensSearch, 700);
+});
 $("#lens-q").addEventListener("input", () => { if (state.qMode === "fires" && document.activeElement === $("#lens-q")) $("#inf-text").value = $("#lens-q").value; });
 // fires: run text through the model once, then filter what fired without re-running
 state.inf = { text: null, pos: -1, sign: "both" };
 let qGen = 0;
 const stillWanted = (g, mode, q) => g === qGen && state.qMode === mode && $("#lens-q").value.trim() === q;
+const minusTexts = () => $("#inf-minus").value.split("\n").map(t => t.trim()).filter(Boolean);
 async function runInfer(text, g) {
   markLeftFresh("run");
-  if (text !== state.inf.text) {
-    $("#run-rows").innerHTML = `<li class="head">running…</li>`;
-    const r = await api("/api/infer", { text });
-    if (!stillWanted(g, "fires", text)) return;
+  const minus = minusTexts(), key = JSON.stringify([text, minus]);
+  if (key !== state.inf.key) {
+    $("#run-rows").innerHTML = `<li class="head">running${minus.length ? ` with ${minus.length} minus text${minus.length > 1 ? "s" : ""}` : ""}…</li>`;
+    const r = await api("/api/infer", { text, minus });
+    if (!stillWanted(g, "fires", text) || JSON.stringify(minusTexts()) !== JSON.stringify(minus)) return;
     if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(state.statusText || "measuring neuron ranges")}</li>`; return; }
-    state.inf = { ...state.inf, text, pos: -1, tokens: r.tokens };
+    state.inf = { ...state.inf, text, key, pos: -1, tokens: r.tokens };
     $("#inf-toks").innerHTML = r.tokens.map((t, i) => `<button data-i="${r.pos[i]}">${esc(t)}</button>`).join("");
   }
   await inferView(g);
@@ -378,7 +384,7 @@ async function runLensSearch() {
   if (q.length < 2) {
     // an emptied box clears both: lens hits, and the last run with its token chips, pinned token and token web
     lensResults = null; fireResults = null;
-    state.inf = { ...state.inf, text: null, pos: -1, tokens: null };
+    state.inf = { ...state.inf, text: null, key: null, pos: -1, tokens: null };
     $("#inf-toks").innerHTML = ""; $("#run-rows").innerHTML = "";
     syncLeftMap(); renderList(); return;
   }
@@ -463,8 +469,9 @@ function renderResults(r, ol) {
   if (!r.ready) { ol.innerHTML = `<li class="head">${esc(state.statusText || "indexing lens")}</li>`; return; }
   const rows = (r.results || []).map(x => `<li class="res${x.swept === false ? " unswept" : ""}" data-l="${x.layer}" data-n="${x.n}" data-kind="neuron">
     <span class="n">L${x.layer} N${x.n}</span><span class="sg ${x.sign === "+" ? "up" : "down"}">${r.fires ? `${x.sign === "+" ? "" : "−"}${x.score.toFixed(1)}×` : `${x.sign === "+" ? "+" : "−"}${x.rank + 1}`}</span>
-    <span class="w">${r.fires ? `<span class="tk">"${esc(x.token)}"</span>` : ""}${x.name ? `<b>${esc(x.name)}</b> ` : ""}${esc(x.lens.join(" "))}</span></li>`).join("");
-  const head = r.fires ? `${r.total ?? 0} neurons pass · score = activation ÷ its typical extreme` : `${r.total ?? 0} neurons · ${r.tokens ?? 0} tokens`;
+    <span class="w">${x.main != null ? `<span class="raw" title="score on the text · mean score on the minus texts">${x.main.toFixed(1)} − ${x.minus.toFixed(1)}</span>` : ""}${r.fires ? `<span class="tk">"${esc(x.token)}"</span>` : ""}${x.name ? `<b>${esc(x.name)}</b> ` : ""}${esc(x.lens.join(" "))}</span></li>`).join("");
+  const head = r.contrast ? `${r.total ?? 0} neurons pass · contrast = score on the text − mean score on ${r.contrast} minus text${r.contrast > 1 ? "s" : ""}`
+    : r.fires ? `${r.total ?? 0} neurons pass · score = activation ÷ its typical extreme` : `${r.total ?? 0} neurons · ${r.tokens ?? 0} tokens`;
   // both signs are strong responses; the sign is only the direction
   const why = r.fires ? "−2× is as strong as +2×: the neuron fires negatively instead. The sign shows direction, not strength."
     : "+n: the token ranks nth among what this neuron pushes toward; −n: nth among what it pushes away from. Both mean a strong link; the sign shows direction.";

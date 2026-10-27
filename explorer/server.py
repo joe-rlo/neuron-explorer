@@ -647,11 +647,21 @@ async def infer(req: Request):
     b = await req.json()
     if not os.path.exists(ACT_SCALE) or rt.tok is None:
         return {"ready": False}
+    # minus texts (contrast search): each neuron's strongest score per side on each, averaged over the texts
+    minus = [t for t in (b.get("minus") or []) if t.strip()]
+    mpos = mneg = None
+    if minus:
+        mpos, mneg = 0, 0
+        for t in minus:
+            _, _, ms = await score_text(t, b.get("chat", False))
+            mpos = mpos + np.maximum(ms.max(1), 0); mneg = mneg + np.minimum(ms.min(1), 0)
+        mpos, mneg = mpos / len(minus), mneg / len(minus)
     ids, acts, score = await score_text(b["text"], b.get("chat", False), heads=True)
     units = rt.token_units(ids)
     unit_of = {i: k for k, (_, idx) in enumerate(units) for i in idx}
     _infer.clear()
-    _infer.update(ids=ids, toks=[units[unit_of[i]][0] for i in range(len(ids))], acts=acts, score=score, units=units)
+    _infer.update(ids=ids, toks=[units[unit_of[i]][0] for i in range(len(ids))], acts=acts, score=score, units=units,
+                  minus=minus, mpos=mpos, mneg=mneg)
     # one chip per unit; clicking it selects the unit's last token (the one that completes the character)
     return {"ready": True, "tokens": [u[0] for u in units], "pos": [u[1][-1] for u in units]}
 
@@ -672,10 +682,17 @@ async def infer_view(pos: int = -1, sign: str = "both", lo: int = 0, hi: int = 9
     else:
         at = S.argmax(1) if sign == "+" else S.argmin(1) if sign == "-" else np.abs(S).argmax(1)  # [L, N]
         best = np.take_along_axis(S, at[:, None, :], 1)[:, 0, :]
-    view = best.copy()
-    keep = np.abs(best) >= min
-    if sign == "+": keep &= best > 0
-    if sign == "-": keep &= best < 0
+    # with minus texts the ranking is the contrast: the score here minus the mean of the neuron's strongest score on
+    # the same side over the minus texts, so a neuron that fires as hard on the minus texts drops out
+    con = None
+    if _infer.get("minus"):
+        base = np.where(best >= 0, _infer["mpos"], _infer["mneg"])
+        con = best - base
+        con = np.where(np.sign(con) == np.sign(best), con, 0).astype(np.float32)  # only a response beyond the minus texts
+    view = (best if con is None else con).copy()
+    keep = np.abs(view) >= min
+    if sign == "+": keep &= view > 0
+    if sign == "-": keep &= view < 0
     lay = np.arange(best.shape[0])[:, None]
     keep &= (lay >= lo) & (lay <= hi)
     idx = lens_index()
@@ -687,7 +704,7 @@ async def infer_view(pos: int = -1, sign: str = "both", lo: int = 0, hi: int = 9
         keep &= lens_hit
     view[~keep] = 0
     ls, ns = np.nonzero(keep)
-    order = np.argsort(-np.abs(best[ls, ns]))[:limit]
+    order = np.argsort(-np.abs(view[ls, ns]))[:limit]
     nm, res = names(), []
     for o in order:
         l, n = int(ls[o]), int(ns[o]); sg = "+" if best[l, n] > 0 else "-"
@@ -696,8 +713,12 @@ async def infer_view(pos: int = -1, sign: str = "both", lo: int = 0, hi: int = 9
         res.append({"layer": l, "n": n, "sign": sg, "score": round(float(abs(best[l, n])), 2),
                     "act": round(float(A[l, t, n]), 2), "token": toks[t], "pos": t,
                     "name": nm.get(f"L{l}/N{n}", ""), "lens": lens})
+        if con is not None:
+            res[-1].update(score=round(float(abs(con[l, n])), 2), main=round(float(abs(best[l, n])), 2),
+                           minus=round(float(abs(base[l, n])), 2))
     blob = base64.b64encode(view.astype(np.float16).tobytes()).decode()
-    return {"results": res, "total": int(keep.sum()), "map": blob, "shape": list(view.shape)}
+    return {"results": res, "total": int(keep.sum()), "map": blob, "shape": list(view.shape),
+            "contrast": len(_infer.get("minus") or [])}
 
 
 def _heads_for_infer():

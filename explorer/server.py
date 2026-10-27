@@ -387,12 +387,16 @@ def _chat_summary(b, cfg, n, temp, seed, max_new, rows, msgs, texts, ids):
             col["coh_vs0"] = exm.paired(r["coherence"], raw[1]["coherence"], B, bs)
         cols.append(col)
     out = {"columns": cols, "n": n, "warn": n < cfg["warn_n"], "device": rt.dev, "reproducible": rt.dev != "mps"}
-    out["id"] = _save_experiment("chat", {
+    eid = out["id"] = _save_experiment("chat", {
         "layer": int(b["layer"]), "neurons": [{"layer": int(b["layer"]), "n": int(b["n"])}], "action": "steer",
         "mode": mode, "doses": [dose, 0, -dose] if mode == "add" else [dose, 1, -dose],
         "seeds": [seed + i for i in range(n)], "n": n, "temperature": temp, "max_tokens": max_new,
         "prompt": b["prompt"], "history": b.get("history", []), "measures": [measure, "coherence", "script mix"],
         "raw": raw, "summary": exm.finite(cols), "prediction": b.get("prediction"), "verdict": None})
+    v = cols[0]["vs0"]
+    _record_result([{"layer": int(b["layer"]), "n": int(b["n"])}], measure, "steer", exm.finite(
+        {"sentence": v["sentence"], **{k: v[k] for k in ("diff", "ci", "d", "n")}, "dose": dose, "mode": mode,
+         "prompt": b["prompt"], "experiment": eid}))
     return exm.finite(out)
 
 
@@ -619,6 +623,119 @@ def _run_sweep(job, b, cfg):
             _write_json(WINDOWS, ws)
         emit(exm.finite({"end": True, "id": eid, "window": win, "index": exm.best_index(win) if win else None,
                          "cancelled": cancelled}))
+    except Exception as e:
+        emit({"error": repr(e)})
+        emit({"end": True, "cancelled": True})
+    finally:
+        job["done"] = True
+
+
+MEANS = os.path.join(EXPERIMENTS, "neuron_means.npz")
+RESULTS = os.path.join(EXPERIMENTS, "neuron_results.json")
+
+
+def _record_result(neurons, measure, kind, value):
+    """The latest steering or ablation result per neuron and measure, for the neuron card (Details tab)."""
+    rs = _read_json(RESULTS, {})
+    for x in neurons:
+        rs.setdefault(f"L{x['layer']}/N{x['n']}", {}).setdefault(measure["name"], {})[kind] = value
+    _write_json(RESULTS, rs)
+
+
+@app.get("/api/experiment/results")
+def experiment_results(layer: int, n: int):
+    return _read_json(RESULTS, {}).get(f"L{layer}/N{n}", {})
+
+
+@app.post("/api/experiment/ablate")
+async def experiment_ablate(req: Request):
+    """Starts a lesion run as a background job: the prompt `samples` times intact and `samples` times with the
+    neuron(s) ablated, paired by seed, scored with the measure plus coherence and script mix. method "mean" sets each
+    neuron to its mean activation over web text (computed once into experiments/neuron_means.npz), "zero" to 0.
+    Progress at /api/experiment/events."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    import uuid
+    cfg = exm.config()
+    job = {"id": uuid.uuid4().hex[:12], "events": [], "cancel": threading.Event(), "done": False}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_ablate, args=(job, b, cfg), daemon=True).start()
+    return {"id": job["id"]}
+
+
+def _run_ablate(job, b, cfg):
+    import time
+    emit = job["events"].append
+    try:
+        neurons = [{"layer": int(x["layer"]), "n": int(x["n"])} for x in (b.get("neurons") or [b])]
+        method, measure, prompt = b.get("method", cfg["ablation"]), b["measure"], b["prompt"]
+        n = builtins.max(1, builtins.min(32, int(b.get("samples", cfg["n"]))))
+        temp, seed, max_new = float(b.get("temperature", cfg["temperature"])), int(b.get("seed", cfg["seed"])), \
+            int(b.get("max_new", cfg["max_new"]))
+        rows = [(c, i) for c in (0, 1) for i in range(n)]
+        emit({"start": True, "n": n, "total": len(rows), "method": method})
+        rt.ensure_loaded()
+        emit({"device": rt.dev, "reproducible": rt.dev != "mps"})
+        if method == "mean" and not os.path.exists(MEANS):
+            os.makedirs(EXPERIMENTS, exist_ok=True)
+            done = rt.build_act_mean(MEANS, cfg["mean_tokens"], progress=lambda s, t: emit({"means": {"done": s, "total": t}}),
+                                     cancel=job["cancel"])
+            if done is None:
+                emit({"end": True, "cancelled": True})
+                return
+        value = np.load(MEANS)["mean"] if method == "mean" else None
+        target = [(x["layer"], x["n"], 0.0 if value is None else float(value[x["layer"], x["n"]])) for x in neurons]
+        msgs = [{"role": "user", "content": prompt}]
+        texts, coh = {}, {}
+        t0, per = time.time(), builtins.max(1, cfg["max_batch"])
+        for k in range(0, len(rows), per):
+            if job["cancel"].is_set():
+                break
+            chunk = rows[k:k + per]
+            with rt.lock:
+                push = [rt.push_rows(l, nn, "set", [v if c else None for c, _ in chunk]) for l, nn, v in target]
+            ids, text = None, {x: "" for x in chunk}
+            for r, delta in rt.generate(push, [msgs] * len(chunk), max_new, job["cancel"], [seed + i for _, i in chunk], temp):
+                if r is None:
+                    ids = delta
+                else:
+                    text[chunk[r]] += delta
+            if job["cancel"].is_set() or ids is None:
+                break
+            texts.update(text)
+            coh.update(zip(chunk, rt.reply_logprob([msgs] * len(chunk), ids)))
+            done = k + len(chunk)
+            emit({"progress": {"done": done, "total": len(rows), "eta": round((time.time() - t0) / done * (len(rows) - done), 1)}})
+        if job["cancel"].is_set() or len(texts) < len(rows):
+            emit({"end": True, "cancelled": True})
+            return
+        B, bs = cfg["bootstrap"], cfg["bootstrap_seed"]
+        who = f"L{neurons[0]['layer']} N{neurons[0]['n']}" if len(neurons) == 1 else f"the set of {len(neurons)} neurons"
+        label = f"{'Mean' if method == 'mean' else 'Zero'}-ablating {who}"
+        cols, raw = [], []
+        for c, lab in enumerate(("intact", "ablated")):
+            t = [texts[(c, i)] for i in range(n)]
+            m, sm = _scores(t, prompt, measure)
+            raw.append({"label": lab, "texts": t, "measure": m, "coherence": [coh[(c, i)] for i in range(n)], "script": sm})
+        for c, r in enumerate(raw):
+            col = {"label": r["label"], "measure": exm.summary(r["measure"], B, bs), "coherence": exm.summary(r["coherence"], B, bs),
+                   "script": exm.summary(r["script"], B, bs), "scores": r["measure"], "coh_scores": r["coherence"], "texts": r["texts"]}
+            if c == 1:
+                p = exm.paired(r["measure"], raw[0]["measure"], B, bs)
+                col["vs0"] = {**p, "sentence": exm.sentence(label, measure, p, "the intact model")}
+                col["coh_vs0"] = exm.paired(r["coherence"], raw[0]["coherence"], B, bs)
+            cols.append(col)
+        eid = _save_experiment("ablate", {
+            "layer": neurons[0]["layer"], "neurons": neurons, "action": "ablate", "method": method,
+            "values": [v for _, _, v in target], "seeds": [seed + i for i in range(n)], "n": n, "temperature": temp,
+            "max_tokens": max_new, "prompt": prompt, "measures": [measure, "coherence", "script mix"], "raw": raw,
+            "summary": exm.finite(cols), "prediction": b.get("prediction"), "verdict": None})
+        _record_result(neurons, measure, "ablate", exm.finite({"sentence": cols[1]["vs0"]["sentence"], **{k: cols[1]["vs0"][k] for k in ("diff", "ci", "d", "n")},
+                                                               "method": method, "set": len(neurons), "prompt": prompt, "experiment": eid}))
+        emit(exm.finite({"summary": {"columns": cols, "n": n, "warn": n < cfg["warn_n"], "device": rt.dev,
+                                     "reproducible": rt.dev != "mps", "id": eid}}))
+        emit({"end": True, "id": eid, "cancelled": False})
     except Exception as e:
         emit({"error": repr(e)})
         emit({"end": True, "cancelled": True})

@@ -154,3 +154,8 @@ def test_food_vs_pizza_neuron():
     assert ex.category_d(food, cats, "food") > 5 and ex.item_selectivity(food) < 0.4
     assert ex.category_d(pizza, cats, "food") > 0.8 and ex.item_selectivity(pizza) > 0.7
     assert items[int(pizza.argmax())] == "pizza"
+
+
+def test_sentence_versus():
+    s = ex.sentence("Mean-ablating L1 N2", FOOD, {"diff": -2.0, "ci": [-3.0, -1.0], "d": -1.1}, "the intact model")
+    assert s == "Mean-ablating L1 N2 lowered food words by 2.00 per 100 words (95% CI -3.00 to -1.00) versus the intact model."

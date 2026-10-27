@@ -619,7 +619,7 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   $("#f-name").disabled = kind !== "neuron";
   $("#tab-examples").innerHTML = ""; $("#tab-details").innerHTML = "";
   state.thread = []; renderThread(); $("#c-reads").innerHTML = ""; $("#c-lens").innerHTML = "";
-  syncTabs();
+  syncTabs(); renderSet();
   if (layer !== state.layer) { if (state.layer != null) jumpNotice(layer); await setLayer(layer); }
   if (!isFocus(layer, n, kind)) return;
   setNameField(state.unitMap[layer]?.get(n)?.name || "");
@@ -664,6 +664,7 @@ async function openHead(layer, head) {
   $("#f-id").textContent = `L${layer} h${head}`; $("#f-rank").textContent = "";
   $("#f-name").style.display = "none";
   if (curTab() === "claude") syncTabs(); else { focusEl.classList.remove("on"); syncTabs(); }
+  renderSet();
   syncEdge(); updateInsets();
   refreshWeb(); renderAgentActions();
   shadeTokens(tokHover ?? state.inf.pos);
@@ -713,7 +714,7 @@ function renderDetails(u) {
     h += `<table class="dtable"><tr><th class="num">dose</th><th class="num">push</th><th class="num">distinct-4</th><th class="num">capped</th><th class="num">logprob</th></tr>` +
       Object.entries(s.dose).map(([d, v]) => `<tr><td class="num">${d}</td><td class="num">${v.rel_push.toFixed(2)}</td><td class="num">${v.distinct4.toFixed(2)}</td><td class="num">${(v.capped * 100).toFixed(0)}%</td><td class="num">${v.logprob.toFixed(2)}</td></tr>`).join("") + `</table>`;
   }
-  h += `<div id="d-window"></div><div id="d-lens" class="slot">—</div><div class="lab" style="margin-top:18px">connections</div><div id="d-con" class="slot">—</div>`;
+  h += `<div id="d-window"></div><div id="d-results"></div><div id="d-lens" class="slot">—</div><div class="lab" style="margin-top:18px">connections</div><div id="d-con" class="slot">—</div>`;
   $("#tab-details").innerHTML = h;
   renderWindow();
 }
@@ -865,6 +866,7 @@ async function loadExperiments() {
   try { X.cfg = await api("/api/experiment/config"); X.windows = await api("/api/experiment/windows"); }
   catch { return; }
   X.measures = X.cfg.measures;
+  $("#x-method").value = X.cfg.ablation || "mean";
   $("#x-n").value = X.cfg.n; $("#x-temp").value = X.cfg.temperature; $("#x-max").value = X.cfg.max_new; $("#x-seed").value = X.cfg.seed;
   let saved = null; try { saved = localStorage.getItem("ne.measure"); } catch {}
   X.pick = saved ?? LENS_MEASURE; renderMeasures();
@@ -952,7 +954,7 @@ $("#x-edit").onclick = () => { const ed = $("#x-editor"); ed.hidden = !ed.hidden
 
 function renderThread() {
   const el = $("#c-thread");
-  el.innerHTML = state.thread.map((t, i) => t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : turnHTML(t, i)).join("");
+  el.innerHTML = state.thread.map((t, i) => t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i)).join("");
   el.scrollTop = el.scrollHeight;
 }
 const COL_TIPS = ["pushed up by +dose", "unsteered: the baseline the other two are compared with", "pushed down by −dose"];
@@ -983,7 +985,7 @@ function colStats(c, m) {
   const row = (k, tip, v, sub = "") => `<div title="${tip}"><span class="k">${k}</span><span>${v}${sub ? `<span class="ci">${sub}</span>` : ""}</span></div>`;
   return `<div class="xs">`
     + (m ? row(esc(m.name), `mean ${esc(m.name)} over ${c.measure.n} replies, with its 95% interval`, num(c.measure.mean), ivl(c.measure.ci)) : "")
-    + (m && c.vs0 ? row("vs 0", "change from the unsteered column, reply by reply, with its 95% interval and effect size d (0.5 is medium, 0.8 large)",
+    + (m && c.vs0 ? row(c.label === "ablated" ? "vs intact" : "vs 0", "change from the unsteered (or intact) column, reply by reply, with its 95% interval and effect size d (0.5 is medium, 0.8 large)",
                         sgn(c.vs0.diff), [ivl(c.vs0.ci), c.vs0.d != null ? `d ${num(c.vs0.d)}` : ""].filter(Boolean).join(" · ")) : "")
     + row("coherence", "mean log-probability per token under the unsteered model: near 0 reads naturally, much lower is garbled", num(c.coherence.mean), ivl(c.coherence.ci))
     + (c.script.mean > 0.01 ? row("other script", "share of letters in a different writing system from the prompt", `${Math.round(c.script.mean * 100)}%`) : "") + `</div>`;
@@ -995,7 +997,7 @@ $("#c-thread").addEventListener("click", e => {
 });
 function renderTurn(t) {
   const i = state.thread.indexOf(t), el = $(`#c-thread .turn[data-i="${i}"]`);
-  if (el) el.outerHTML = t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : turnHTML(t, i);
+  if (el) el.outerHTML = t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i);
 }
 $("#c-clear").onclick = () => { if (running) running.abort(); if (X.job) api("/api/experiment/cancel", { id: X.job.id }).catch(() => {}); state.thread = []; renderThread(); };
 let reading = false;
@@ -1023,7 +1025,7 @@ $("#c-form").addEventListener("submit", async e => {
   if (state.chat.dir === "reads") return runReads(f, text);
   await lensReady(); if (running || !isFocus(f.layer, f.n, f.kind)) return;
   const dose = state.chat.mode === "mul" ? state.chat.dose.mul : state.chat.dose.add, x = xSettings();
-  const history = state.thread.filter(t => t.kind !== "sweep" && !t.error).map(t => ({ user: t.user, replies: t.replies }));
+  const history = state.thread.filter(t => !t.kind && !t.error).map(t => ({ user: t.user, replies: t.replies }));
   const blank = () => Array.from({ length: x.n }, () => "");
   const turn = { user: text, n: x.n, pick: 0, replies: [blank(), blank(), blank()], done: [false, false, false], dose,
                  mode: state.chat.mode, temperature: x.temperature, measure: x.measure, live: true };
@@ -1038,7 +1040,7 @@ $("#c-form").addEventListener("submit", async e => {
     await sse(res, ev => {
       if (ev.error) turn.error = ev.error;
       if (ev.phase === "scoring") { turn.done = [true, true, true]; turn.scoring = true; renderTurn(turn); }
-      if (ev.summary) { turn.summary = ev.summary; turn.scoring = false; renderTurn(turn); }
+      if (ev.summary) { turn.summary = ev.summary; turn.scoring = false; renderTurn(turn); renderLesionCard(); }
       if (ev.row == null) return;
       turn.replies[ev.row][ev.s] += ev.t;
       if (ev.s !== turn.pick) return;
@@ -1158,6 +1160,19 @@ function renderWindow() {
   const el = $("#d-window"), f = state.focus; if (!el || !f) return;
   const m = currentMeasure(), w = m && windowOf(f.layer, f.n, m.name);
   el.innerHTML = w ? `${windowHTML(w.window, m.name)}<div class="xnote dim">from a dose sweep on “${esc(w.prompt)}”</div>` : "";
+  renderLesionCard();
+}
+// steering and ablation side by side on the neuron card: steering tests sufficiency, ablation necessity
+async function renderLesionCard() {
+  const f = state.focus, m = currentMeasure(); if (!$("#d-results") || !f || f.kind !== "neuron") return;
+  const r = await api(`/api/experiment/results?layer=${f.layer}&n=${f.n}`).catch(() => ({}));
+  const el = $("#d-results"); if (!el || !isFocus(f.layer, f.n, "neuron")) return;
+  const x = m ? r[m.name] || {} : {};
+  if (!x.steer && !x.ablate) { el.innerHTML = ""; return; }
+  const cell = (k, title, tip, v, how) => `<div class="lcell" title="${tip}"><div class="lab">${title}</div>${v ? `<div class="xline">${esc(v.sentence)}</div><div class="xnote dim">${how(v)} · “${esc(v.prompt)}” · n ${v.n}</div>` : `<div class="xnote dim">not run yet for ${esc(m.name)}</div>`}</div>`;
+  el.innerHTML = `<div class="lab">steering vs ablation · ${esc(m.name)}</div><div class="lcard">`
+    + cell("steer", "steering · is it sufficient?", "pushing the neuron: does that alone move the measure?", x.steer, v => `${v.mode === "mul" ? "×" : "add"} ${v.dose}`)
+    + cell("ablate", "ablation · is it necessary?", "removing the neuron: does the measure depend on it?", x.ablate, v => `${v.method} ablation${v.set > 1 ? ` of a set of ${v.set}` : ""}`) + `</div>`;
 }
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
@@ -1263,6 +1278,78 @@ $("#t-editor").addEventListener("click", e => {
 });
 $("#t-edit").onclick = () => { const ed = $("#t-editor"); ed.hidden = !ed.hidden; if (!ed.hidden) renderTuneEditor(); };
 
+// ---------- lesion: the neuron (or the pinned set) ablated against the intact model, paired by seed ----------
+let pinned = []; try { pinned = JSON.parse(localStorage.getItem("ne.set") || "[]"); } catch {}
+const inSet = (l, n) => pinned.some(x => x.layer === l && x.n === n);
+function renderSet() {
+  try { localStorage.setItem("ne.set", JSON.stringify(pinned)); } catch {}
+  const f = state.focus, on = f?.kind === "neuron" && inSet(f.layer, f.n);
+  $("#f-pin").style.display = f?.kind === "neuron" ? "" : "none";
+  $("#f-pin").textContent = on ? "− set" : "+ set";
+  $("#f-pin").classList.toggle("on", on);
+  const el = $("#x-set"); el.hidden = !pinned.length;
+  el.innerHTML = pinned.length ? `<span class="xk">set</span>${pinned.map(x => `<span class="chip" data-l="${x.layer}" data-n="${x.n}" title="open">L${x.layer} N${x.n}</span>`).join("")}
+    <label class="xf" title="ablate every neuron in the set together; single-neuron ablations often show nothing when other neurons carry the same signal"><input type="checkbox" id="x-ablate-set"${X.ablateSet ? " checked" : ""}> ablate the whole set</label><button type="button" id="x-set-clear" class="dim">clear set</button>` : "";
+}
+$("#f-pin").onclick = () => {
+  const f = state.focus; if (f?.kind !== "neuron") return;
+  pinned = inSet(f.layer, f.n) ? pinned.filter(x => !(x.layer === f.layer && x.n === f.n)) : [...pinned, { layer: f.layer, n: f.n }];
+  renderSet();
+};
+$("#x-set").addEventListener("click", e => {
+  if (e.target.id === "x-set-clear") { pinned = []; X.ablateSet = false; renderSet(); return; }
+  if (e.target.id === "x-ablate-set") { X.ablateSet = e.target.checked; return; }
+  const c = e.target.closest(".chip"); if (c) goToNeuron(+c.dataset.l, +c.dataset.n, "neuron");
+});
+async function runAblate() {
+  const f = state.focus; if (!f || f.kind !== "neuron" || !X.cfg) return;
+  if (X.job) { $("#status").textContent = "a run is already going"; return; }
+  await lensReady(); if (X.job || !isFocus(f.layer, f.n, "neuron")) return;
+  const x = xSettings();
+  if (!x.measure) { $("#status").textContent = "pick a measure before ablating"; return; }
+  const prompt = $("#c-input").value.trim() || $("#c-input").placeholder, method = $("#x-method").value;
+  const neurons = X.ablateSet && pinned.length ? pinned : [{ layer: f.layer, n: f.n }];
+  const t = { kind: "ablate", prompt, measure: x.measure, method, neurons, n: x.n, temperature: x.temperature, pick: 0, live: true };
+  state.thread.push(t); renderThread();
+  let r;
+  try { r = await api("/api/experiment/ablate", { layer: f.layer, n: f.n, neurons, prompt, measure: x.measure, method, samples: x.n,
+                                                   temperature: x.temperature, seed: x.seed, max_new: x.max_new }); }
+  catch (err) { r = { error: err.message }; }
+  if (r.error) { t.error = r.error; t.live = false; renderTurn(t); return; }
+  X.job = { id: r.id, t };
+  try {
+    await sse(await fetch(`/api/experiment/events?id=${r.id}`), ev => {
+      if (ev.error) t.error = ev.error;
+      if (ev.means) t.means = ev.means;
+      if (ev.progress) { t.progress = ev.progress; t.means = null; }
+      if (ev.summary) { t.summary = ev.summary; renderLesionCard(); }
+      if (ev.end) Object.assign(t, { live: false, cancelled: ev.cancelled });
+      const th = $("#c-thread"), near = th.scrollHeight - th.scrollTop - th.clientHeight < 80;
+      renderTurn(t); if (near) th.scrollTop = th.scrollHeight;
+    });
+  } catch (err) { t.error = String(err); }
+  finally { X.job = null; t.live = false; renderTurn(t); renderLesionCard(); }
+}
+$("#x-ablate").onclick = runAblate;
+function ablateHTML(t, i) {
+  const S = t.summary, m = t.measure, p = t.progress;
+  const who = t.neurons.length === 1 ? `L${t.neurons[0].layer} N${t.neurons[0].n}` : `a set of ${t.neurons.length}: ${t.neurons.map(x => `L${x.layer} N${x.n}`).join(", ")}`;
+  const head = `<div class="user sweep-head">${t.method} ablation of ${esc(who)} · ${t.n} replies each · temp ${t.temperature}<span class="recipe">“${esc(t.prompt)}” · ${esc(m.name)}${m.auto ? ` (${esc(m.words.join(", "))})` : ""}</span></div>`;
+  const prog = t.live ? `<div class="xnote dim">${t.means ? `computing every neuron's mean activation over web text, once: ${Math.round(t.means.done / 1000)}k / ${Math.round(t.means.total / 1000)}k tokens`
+      : p ? `${p.done}/${p.total} replies · about ${Math.round(p.eta)} s left` : "starting…"} · <button type="button" class="x-cancel">cancel</button></div>`
+    : t.cancelled ? `<div class="xnote dim">cancelled</div>` : "";
+  if (!S) return `<div class="turn ablate" data-i="${i}">${head}${prog}${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>`;
+  const picker = t.n > 1 ? `<div class="picker" role="group" aria-label="reply"><span class="xk" title="reply i used the same seed in both columns">reply</span>${Array.from({ length: t.n }, (_, s) =>
+    `<button type="button" data-s="${s}" class="${s === t.pick ? "on" : ""}">${s + 1}</button>`).join("")}</div>` : "";
+  const tips = ["the model as it is", "the neuron held at its " + (t.method === "mean" ? "mean activation" : "zero") + " on every token"];
+  const cols = S.columns.map((C, r) => `<div class="col ${r ? "down" : "zero"}"><span class="lab" title="${tips[r]}">${C.label}</span>${colStats(C, m)}<span class="txt">${esc(C.texts[t.pick] || "")}</span>
+    <span class="one">reply ${t.pick + 1}: ${num(C.scores[t.pick])}${C.coh_scores[t.pick] != null ? ` · coherence ${num(C.coh_scores[t.pick])}` : ""}</span></div>`).join("");
+  return `<div class="turn ablate" data-i="${i}">${head}${picker}<div class="cols two">${cols}</div>
+    <div class="xline">${esc(S.columns[1].vs0.sentence)}</div>
+    ${S.warn ? `<div class="xnote warn">${S.n} replies per column (under ${X.cfg?.warn_n ?? 5}), so these intervals are rough.</div>` : ""}
+    ${S.reproducible === false ? `<div class="xnote dim">Running on ${esc(S.device)}: the same seed may not reproduce this exact text.</div>` : ""}</div>`;
+}
+
 async function runReads(f, text) {
   if (reading) return;
   reading = true; $("#c-go").textContent = "…";
@@ -1299,7 +1386,7 @@ window.__ne = { map, state, scatter };
 const have = Object.keys(index.layers).map(Number);
 let saved = null; try { const v = localStorage.getItem("ne.layer"); if (v !== null) saved = +v; } catch {}
 const first = have.includes(saved) ? saved : have.includes(22) ? 22 : (have[0] ?? 0);
-loadExperiments(); loadTuning();
+loadExperiments(); loadTuning(); renderSet();
 await setLayer(first);
 if (location.hash) fromHash(); else restoreFocus();
 

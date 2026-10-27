@@ -124,7 +124,7 @@ def _num(v):
     return f"{v:.2f}" if abs(v) < 10 else f"{v:.1f}"
 
 
-def sentence(label, measure, p):
+def sentence(label, measure, p, versus="no steering"):
     """One plain line for a paired result, e.g. '+0.5 raised food words by 2.1 per 100 words (95% CI 0.9 to 3.4)
     versus no steering.'"""
     if p["diff"] is None:
@@ -138,10 +138,10 @@ def sentence(label, measure, p):
         size = f"{_num(abs(diff))}{' ' + u if u else ''}"
         cis = f" (95% CI {_num(ci[0])} to {_num(ci[1])})" if ci else ""
     if diff == 0 and (ci is None or ci == [0.0, 0.0]):
-        return f"{label} left {name} unchanged versus no steering."
+        return f"{label} left {name} unchanged versus {versus}."
     verb = "raised" if diff > 0 else "lowered"
-    tail = "" if excludes_zero(ci) else "; the interval includes zero, so this is not distinguishable from no steering"
-    return f"{label} {verb} {name} by {size}{cis} versus no steering{tail}."
+    tail = "" if excludes_zero(ci) else f"; the interval includes zero, so this is not distinguishable from {versus}"
+    return f"{label} {verb} {name} by {size}{cis} versus {versus}{tail}."
 
 
 # ---------- dose-response ----------

@@ -116,6 +116,8 @@ class Runtime:
                         h = h * vals[:, None, None].to(h.dtype)
                     elif mode == "mul":
                         h[:, :, n] = h[:, :, n] * vals[:, None].to(h.dtype)
+                    elif mode == "set":  # ablation: rows with a value get it in place of the activation, NaN rows stay
+                        h[:, :, n] = torch.where(vals.isnan()[:, None], h[:, :, n], vals.nan_to_num()[:, None].to(h.dtype))
                     else:
                         h[:, :, n] = h[:, :, n] + vals[:, None].to(h.dtype)
                 return (h,)
@@ -590,8 +592,11 @@ class Runtime:
 
     def push_rows(self, layer, n, mode, values):
         """One neuron's push with an explicit dose per batch row, in the user's units: add values are multiples of
-        the layer's median residual norm (0 = left alone); mul values multiply the activation (1 = left alone)."""
-        if mode == "mul":
+        the layer's median residual norm (0 = left alone); mul values multiply the activation (1 = left alone); set
+        values replace the activation (None = left alone), as in ablation."""
+        if mode == "set":
+            vals = [float("nan") if v is None else float(v) for v in values]
+        elif mode == "mul":
             vals = list(values)
         else:
             unit = self.layer_resid_p50(layer) / float(self.down_col(layer, n).norm())
@@ -945,6 +950,28 @@ class Runtime:
                 return self._capture_all
             finally:
                 self._capture_all, self._capture_from = None, 0
+
+    def build_act_mean(self, path, tokens=10000, seq=512, seed=0, progress=None, cancel=None):
+        """Each neuron's mean activation over web text (positions >= 1), the same text build_act_scale reads: the
+        value mean ablation sets a neuron to. progress(seen, tokens) after each chunk; returns None if cancelled."""
+        from datasets import load_dataset
+        self.ensure_loaded()
+        total, buf, seen = None, [], 0
+        for d in load_dataset("HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True).shuffle(seed=seed):
+            buf += self.tok(d["text"], add_special_tokens=False).input_ids + [self.tok.eos_token_id]
+            while len(buf) >= seq and seen < tokens:
+                if cancel is not None and cancel.is_set():
+                    return None
+                chunk, buf = buf[:seq], buf[seq:]
+                acts = self.full_activations(chunk)[:, 1:, :].astype(np.float64).sum(1)  # [L, N]
+                total = acts if total is None else total + acts
+                seen += seq - 1
+                if progress:
+                    progress(seen, tokens)
+            if seen >= tokens:
+                break
+        np.savez(path, mean=(total / seen).astype(np.float32), tokens=seen)
+        return path
 
     def build_act_scale(self, path, tokens=10000, seq=512, seed=0):
         """Each neuron's largest positive and most negative activation over web text (positions >= 1)."""

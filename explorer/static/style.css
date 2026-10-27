@@ -422,3 +422,18 @@ tr.con .logit .tok { font-size: 10.5px; }
 .tlegend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); margin: 4px 0 10px; }
 .tlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
 .tstats > div { grid-template-columns: minmax(0, 10.5em) 1fr; }
+
+/* lesion */
+#f-pin { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+#f-pin.on { color: var(--ink); background: var(--raise); }
+#x-ablate { font-size: 12px; background: var(--raise); padding: 3px 10px; border-radius: 4px; }
+#x-set { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+#x-set[hidden] { display: none; }
+#x-set .chip { font: 11px var(--mono); background: var(--raise); padding: 1px 6px; border-radius: 3px; cursor: pointer; }
+#x-set #x-set-clear { margin-left: auto; font-size: 12px; }
+#tab-chat.reads #x-set { display: none; }
+.turn .cols.two { grid-template-columns: 1fr 1fr; }
+#d-results { margin-bottom: 14px; }
+.lcard { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.lcell .lab { color: var(--dim); }
+@media (max-width: 760px) { .lcard, .turn .cols.two { grid-template-columns: 1fr; } }

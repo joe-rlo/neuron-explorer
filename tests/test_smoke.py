@@ -75,3 +75,24 @@ def test_chat_samples_are_paired_and_seeded(live):
     assert [c["label"] for c in sa["columns"]] == ["+0.5", "0", "−0.5"]
     assert "vs0" in sa["columns"][0] and "vs0" not in sa["columns"][1]
     assert a[(1, 0)] == b[(1, 0)] and a[(1, 1)] == b[(1, 1)]
+
+
+def test_ablate_writes_experiment(live):
+    """Zero ablation of a set, n = 2: intact and ablated columns paired by seed, saved as an ablate experiment."""
+    measure = {"name": "mentions pizza", "type": "contains", "word": "pizza"}
+    r = post("/api/experiment/ablate", {"neurons": [{"layer": 7, "n": 8659}, {"layer": 6, "n": 6756}], "method": "zero",
+                                        "prompt": "Name a popular Italian dish.", "measure": measure, "samples": 2,
+                                        "max_new": 12, "temperature": 0.7, "seed": 0})
+    assert "id" in r, r
+    events = []
+    with urllib.request.urlopen(f"{URL}/api/experiment/events?id={r['id']}", timeout=900) as s:
+        for line in s:
+            if line.startswith(b"data: "):
+                events.append(json.loads(line[6:]))
+    assert not [e for e in events if "error" in e]
+    summary = next(e["summary"] for e in events if "summary" in e)
+    assert [c["label"] for c in summary["columns"]] == ["intact", "ablated"]
+    assert "the intact model" in summary["columns"][1]["vs0"]["sentence"]
+    with open(os.path.join(ROOT, "experiments", events[-1]["id"] + ".json")) as f:
+        rec = json.load(f)
+    assert rec["action"] == "ablate" and rec["method"] == "zero" and rec["values"] == [0.0, 0.0] and len(rec["neurons"]) == 2

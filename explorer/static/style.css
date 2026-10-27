@@ -223,7 +223,7 @@ body.list-hidden #legend { left: 56px; }
 #inf-text { display: block; width: calc(100% - 20px); box-sizing: border-box; resize: vertical; margin: 8px 10px 4px; background: var(--raise); border: 0; border-radius: 4px; padding: 6px 8px; color: var(--ink); font: 13px/1.4 var(--font); outline: none; }
 #inf-minus { display: block; width: calc(100% - 20px); box-sizing: border-box; resize: vertical; margin: 0 10px 4px; background: var(--raise); border: 0; border-radius: 4px; padding: 5px 8px; color: var(--ink); font: 12px/1.4 var(--font); outline: none; }
 #inf-minus::placeholder { color: var(--faint); }
-.rows .raw { font: 11px var(--mono); color: var(--faint); margin-right: 6px; }
+.rows .raw { font: 11px var(--mono); color: var(--faint); margin: 0 6px 0 4px; }
 #inf-toks { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 8px; max-height: 120px; overflow-y: auto; }
 #inf-toks button { font: 12px var(--mono); background: var(--raise); border-radius: 3px; padding: 1px 4px; white-space: pre; color: var(--dim); }
 #inf-toks button.on { background: rgba(56, 200, 255, 0.22); color: var(--ink); }

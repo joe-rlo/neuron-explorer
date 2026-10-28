@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuron Explorer</title>
-<link rel="stylesheet" href="style.css?v=84">
+<link rel="stylesheet" href="style.css?v=85">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%23151515%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%23ffd27a%22/%3E%3C/svg%3E">
 <script type="importmap">
 {"imports": {
@@ -16,16 +16,20 @@
 <body>
 <header>
   <nav id="views">
-    <button data-view="map" class="on" title="the model as a stack of 32 layer sheets, one dot per neuron">map</button>
-    <button data-view="embed" title="this layer's swept rollouts embedded in 2D, colored by neuron, prompt, dose or kind">embeddings</button>
+    <button data-view="map" class="on" title="the model as a stack of 32 layer sheets, one dot per neuron" data-i18n="nav.map">map</button>
+    <button data-view="embed" title="this layer's swept rollouts embedded in 2D, colored by neuron, prompt, dose or kind" data-i18n="nav.embeddings">embeddings</button>
   </nav>
-  <select id="layer" aria-label="layer" title="layer · ● marks layers with sweep rollouts (examples, word mass and the ranked list); other layers have the lens and connections only"></select>
-  <span class="seg" id="layout-mode"><button data-k="index" title="sheet layout: neurons in index order, N0 top left">index</button><button data-k="writes" class="on" title="sheet layout: neurons that write similar directions into the residual stream sit together">writes</button></span>
-  <span class="seg" id="web-mode" title="connection web of the focused neuron: upstream and downstream cones; yellow links push the reader up, magenta push it down"><button data-w="off" title="hide the open neuron's connection web">no web</button><button data-w="on" class="on" title="show the open neuron's connection web: what feeds it (upstream) and what it feeds (downstream)">web</button></span><input id="web-z" value="5" inputmode="numeric" aria-label="web top links" title="web: the open neuron's top links each way">
-  <input id="jump" placeholder="L22 N2742" aria-label="go to neuron" title="go to a neuron: type a layer and neuron, like L22 N2742, and press Enter" spellcheck="false">
-  <span class="seg" id="q-mode"><button data-q="lens" class="on" title="lens: find neurons whose lens has a token containing your text, i.e. neurons that push the model toward or away from it">lens</button><button data-q="fires" title="fires: run your text through the model and list the neurons that fire most on it">fires</button></span>
-  <input id="lens-q" placeholder="search lens" aria-label="search" spellcheck="false" autocomplete="off">
+  <select id="layer" aria-label="layer" title="layer · ● marks layers with sweep rollouts (examples, word mass and the ranked list); other layers have the lens and connections only" data-i18n-aria-label="header.layer"></select>
+  <span class="seg" id="layout-mode" data-i18n-title="header.layoutTitle"><button data-k="index" title="sheet layout: neurons in index order, N0 top left" data-i18n="header.layoutIndex">index</button><button data-k="writes" class="on" title="sheet layout: neurons that write similar directions into the residual stream sit together" data-i18n="header.layoutWrites">writes</button></span>
+  <span class="seg" id="web-mode" title="connection web of the focused neuron: upstream and downstream cones; yellow links push the reader up, magenta push it down" data-i18n-title="header.webTitle"><button data-w="off" title="hide the open neuron's connection web" data-i18n="header.webOff">no web</button><button data-w="on" class="on" title="show the open neuron's connection web: what feeds it (upstream) and what it feeds (downstream)" data-i18n="header.webOn">web</button></span><input id="web-z" value="5" inputmode="numeric" aria-label="web top links" title="web: the open neuron's top links each way" data-i18n-aria-label="header.webZ" data-i18n-title="header.webZTitle">
+  <input id="jump" placeholder="L22 N2742" aria-label="go to neuron" title="go to a neuron: type a layer and neuron, like L22 N2742, and press Enter" spellcheck="false" data-i18n-aria-label="header.jump">
+  <span class="seg" id="q-mode"><button data-q="lens" class="on" title="lens: find neurons whose lens has a token containing your text, i.e. neurons that push the model toward or away from it" data-i18n="header.lens">lens</button><button data-q="fires" title="fires: run your text through the model and list the neurons that fire most on it" data-i18n="header.fires">fires</button></span>
+  <input id="lens-q" placeholder="search lens" aria-label="search" spellcheck="false" autocomplete="off" data-i18n-placeholder="header.searchLens" data-i18n-aria-label="header.search">
   <span id="status" class="mono"></span>
+  <select id="lang" aria-label="Language" title="Language" data-i18n-aria-label="header.language" data-i18n-title="header.language">
+    <option value="en">EN</option>
+    <option value="zh-CN">中文</option>
+  </select>
   <button id="learn-btn" class="dim" title="Learn: how a language model works, step by step, on a sentence you type">learn</button>
   <button id="lab-btn" class="dim" title="Lab: the notebook of every experiment, the field guide and the games">lab</button>
   <button id="tour-btn" class="dim" title="show the tour of the main controls" aria-label="tour">?</button>
@@ -56,7 +60,7 @@
     <div id="embed-empty" class="slot"></div>
     <div id="embed-bar">
       <span class="seg" id="color-by">
-        <button data-c="neuron" class="on">neuron</button><button data-c="prompt">prompt</button><button data-c="dose">dose</button><button data-c="kind">kind</button>
+        <button data-c="neuron" class="on" data-i18n="view.colorNeuron">neuron</button><button data-c="prompt" data-i18n="view.colorPrompt">prompt</button><button data-c="dose" data-i18n="view.colorDose">dose</button><button data-c="kind" data-i18n="view.colorKind">kind</button>
       </span>
     </div>
     <div id="tip" class="float"></div>
@@ -64,39 +68,39 @@
 
   <aside id="list" class="float">
     <div id="focus-head">
-      <div class="id-line"><span id="f-id" class="mono"></span><span id="f-rank" class="mono dim"></span><button id="f-pin" class="mono dim" title="add this neuron to the set: neurons that are ablated together from the Chat tab">+ set</button><button id="f-close" aria-label="close neuron">×</button></div>
-      <textarea id="f-name" rows="1" placeholder="name" spellcheck="false" aria-label="feature name"></textarea>
+      <div class="id-line"><span id="f-id" class="mono"></span><span id="f-rank" class="mono dim"></span><button id="f-pin" class="mono dim" title="add this neuron to the set: neurons that are ablated together from the Chat tab">+ set</button><button id="f-close" aria-label="close neuron" data-i18n-aria-label="focus.close">×</button></div>
+      <textarea id="f-name" rows="1" placeholder="name" spellcheck="false" aria-label="feature name" data-i18n-placeholder="focus.name" data-i18n-aria-label="focus.featureName"></textarea>
     </div>
-    <nav id="ltabs"><button data-lt="net" class="on">net</button><button data-lt="run">run</button><button id="list-hide" class="edge" aria-label="hide list" title="hide the list panel">‹</button></nav>
+    <nav id="ltabs"><button data-lt="net" class="on" data-i18n="list.net">net</button><button data-lt="run" data-i18n="list.run">run</button><button id="list-hide" class="edge" aria-label="hide list" title="hide the list panel" data-i18n-aria-label="list.hide">‹</button></nav>
     <div id="lt-net" class="lpane on">
       <div id="net"></div>
       <div id="list-head">
-        <input id="filter" placeholder="filter" spellcheck="false" aria-label="filter by word or name">
-        <label class="dim"><input type="checkbox" id="show-random"> random</label>
+        <input id="filter" placeholder="filter" spellcheck="false" aria-label="filter by word or name" data-i18n-placeholder="list.filter" data-i18n-aria-label="list.filterAria">
+        <label class="dim"><input type="checkbox" id="show-random"> <span data-i18n="list.random">random</span></label>
         <select id="sort" class="dim" aria-label="sort list" title="mass: how much the neuron's steered rollouts cluster on its top words, as a z-score against random controls · window: therapeutic index from dose sweeps with the chat's measure"><option value="mass">mass</option><option value="window">window</option><option value="si">item selectivity</option><option value="dprime">category d'</option></select>
       </div>
       <ol id="rows" class="rows"></ol>
     </div>
     <div id="lt-run" class="lpane">
-      <textarea id="inf-text" rows="6" placeholder="paste text: see which neurons fire most on each token" spellcheck="false"></textarea>
+      <textarea id="inf-text" rows="6" placeholder="paste text: see which neurons fire most on each token" spellcheck="false" data-i18n-placeholder="list.infText"></textarea>
       <textarea id="inf-minus" rows="2" placeholder="minus (optional): texts to subtract, one per line; ranks neurons by how much more they fire on the text above" title="contrast search: a neuron's score on the main text minus its mean strongest score on these texts, on the same side" spellcheck="false"></textarea>
       <div id="infer">
         <div id="inf-toks"></div>
         <div id="inf-filters">
-          <span class="lab">L</span><input id="inf-lo" value="0" inputmode="numeric" aria-label="from layer"><span class="lab">–</span><input id="inf-hi" value="31" inputmode="numeric" aria-label="to layer">
+          <span class="lab">L</span><input id="inf-lo" value="0" inputmode="numeric" aria-label="from layer" data-i18n-aria-label="list.fromLayer"><span class="lab">–</span><input id="inf-hi" value="31" inputmode="numeric" aria-label="to layer" data-i18n-aria-label="list.toLayer">
           <span class="seg" id="inf-sign"><button data-s="both" class="on">±</button><button data-s="+">+</button><button data-s="-">−</button></span>
-          <span class="lab">≥</span><input id="inf-min" value="1.0" inputmode="decimal" aria-label="minimum score">
-          <input id="inf-q" placeholder="lens has…" aria-label="lens filter" spellcheck="false">
+          <span class="lab">≥</span><input id="inf-min" value="1.0" inputmode="decimal" aria-label="minimum score" data-i18n-aria-label="list.minScore">
+          <input id="inf-q" placeholder="lens has…" aria-label="lens filter" spellcheck="false" data-i18n-placeholder="list.lensHas" data-i18n-aria-label="list.lensFilter">
         </div>
       </div>
       <ol id="run-rows" class="rows"></ol>
     </div>
   </aside>
 
-  <button id="list-tab" class="tab-edge left" aria-label="show list" title="show the list panel">›</button>
-  <button id="focus-tab" class="tab-edge right mono" aria-label="show neuron"></button>
+  <button id="list-tab" class="tab-edge left" aria-label="show list" title="show the list panel" data-i18n-aria-label="list.show">›</button>
+  <button id="focus-tab" class="tab-edge right mono" aria-label="show neuron" data-i18n-aria-label="tabs.showNeuron"></button>
   <aside id="focus" class="float">
-    <nav id="tabs"><button data-tab="examples" class="on">Examples</button><button data-tab="chat">Chat</button><button data-tab="details">Details</button><button data-tab="tuning" title="tuning curve: this neuron's response to each item of a stimulus set">Tuning</button><button data-tab="learn" title="how a language model works, step by step, on a sentence you type">Learn</button><button data-tab="lab" title="the notebook of every experiment, the field guide, and the games">Lab</button><button data-tab="claude">Claude</button><select id="a-agent" class="mono dim" title="agent for new conversations"><option value="claude">claude</option><option value="codex">codex</option></select><button id="a-past" class="mono dim" title="past conversations">past</button><button id="a-new" class="mono dim" title="start a new conversation">new</button><button id="f-collapse" class="edge" aria-label="collapse">›</button></nav>
+    <nav id="tabs"><button data-tab="examples" class="on" data-i18n="tabs.examples">Examples</button><button data-tab="chat" data-i18n="tabs.chat">Chat</button><button data-tab="details" data-i18n="tabs.details">Details</button><button data-tab="tuning" title="tuning curve: this neuron's response to each item of a stimulus set">Tuning</button><button data-tab="learn" title="how a language model works, step by step, on a sentence you type">Learn</button><button data-tab="lab" title="the notebook of every experiment, the field guide, and the games">Lab</button><button data-tab="claude">Claude</button><select id="a-agent" class="mono dim" title="agent for new conversations" data-i18n-title="tabs.agent"><option value="claude">claude</option><option value="codex">codex</option></select><button id="a-past" class="mono dim" title="past conversations" data-i18n-title="tabs.pastTitle" data-i18n="tabs.past">past</button><button id="a-new" class="mono dim" title="start a new conversation" data-i18n-title="tabs.newTitle" data-i18n="tabs.new">new</button><button id="f-collapse" class="edge" aria-label="collapse" data-i18n-aria-label="tabs.collapse">›</button></nav>
     <div id="tab-examples" class="tab on"></div>
     <div id="tab-chat" class="tab">
       <div id="c-lens"></div>
@@ -105,12 +109,12 @@
       <form id="c-form">
         <div id="chat-controls">
           <span class="xk">steer</span>
-          <span class="seg" id="c-mode"><button type="button" data-m="add" class="on" title="add: push along the neuron's output direction by dose × a typical residual size (▲ +dose, ▼ −dose)">add</button><button type="button" data-m="mul" title="×: multiply the neuron's activation by the dose (▲ ×dose, ▼ ×−dose); ×1 leaves it alone">×</button></span>
-          <span class="seg" id="c-dir"><button type="button" data-d="writes" class="on" title="writes: steer the model with this neuron and compare its replies">writes</button><button type="button" data-d="reads" title="reads you: color each token of your text by how strongly this neuron fires on it">reads you</button></span>
-          <span class="stepper" title="dose: the ▲ column is pushed by +dose, the ▼ column by −dose, the middle column is unsteered"><button type="button" id="c-minus" aria-label="smaller dose">−</button><input id="c-dose" class="mono" inputmode="decimal" aria-label="dose" value="0.8"><button type="button" id="c-plus" aria-label="larger dose">+</button></span>
+          <span class="seg" id="c-mode"><button type="button" data-m="add" class="on" title="add: push along the neuron's output direction by dose × a typical residual size (▲ +dose, ▼ −dose)" data-i18n="chat.add">add</button><button type="button" data-m="mul" title="×: multiply the neuron's activation by the dose (▲ ×dose, ▼ ×−dose); ×1 leaves it alone">×</button></span>
+          <span class="seg" id="c-dir"><button type="button" data-d="writes" class="on" title="writes: steer the model with this neuron and compare its replies" data-i18n="chat.writes">writes</button><button type="button" data-d="reads" title="reads you: color each token of your text by how strongly this neuron fires on it" data-i18n="chat.reads">reads you</button></span>
+          <span class="stepper" title="dose: the ▲ column is pushed by +dose, the ▼ column by −dose, the middle column is unsteered"><button type="button" id="c-minus" aria-label="smaller dose">−</button><input id="c-dose" class="mono" inputmode="decimal" aria-label="dose" value="0.8" data-i18n-aria-label="chat.dose"><button type="button" id="c-plus" aria-label="larger dose">+</button></span>
           <button type="button" id="c-blind" aria-pressed="false" title="blind rating: the next replies come as columns X, Y and Z in a shuffled order; you name a property and pick the column that shows it most, then the labels reveal">blind</button>
           <button type="button" id="x-ablate" title="lesion: run the prompt n times intact and n times with this neuron ablated (mean or zero, under settings), paired by seed, and score both">ablate</button>
-          <button type="button" id="c-clear" class="dim" title="clear the conversation (and cancel a running sweep)">clear</button>
+          <button type="button" id="c-clear" class="dim" title="clear the conversation (and cancel a running sweep)" data-i18n="chat.clear">clear</button>
         </div>
         <div id="x-controls">
           <span class="xk">measure</span>
@@ -136,7 +140,7 @@
         <div id="x-predrow"><input id="x-pred" placeholder="prediction (optional), before you run: I expect +0.5 to raise food words" aria-label="prediction" title="written before the run and saved with it; once results arrive you mark it confirmed, disconfirmed or inconclusive (Lab › notebook lists them all)" spellcheck="false" autocomplete="off"></div>
         <div id="x-editor" hidden></div>
         <div id="x-set" hidden></div>
-        <div class="row"><input id="c-input" placeholder="Who are you?" autocomplete="off"><button id="c-go" type="submit">run</button></div>
+        <div class="row"><input id="c-input" placeholder="Who are you?" autocomplete="off" data-i18n-placeholder="chat.who"><button id="c-go" type="submit" data-i18n="chat.run">run</button></div>
       </form>
     </div>
     <div id="tab-details" class="tab"></div>
@@ -155,14 +159,14 @@
       <div id="lab-body"></div>
     </div>
     <div id="tab-claude" class="tab">
-      <div id="a-thread"><div class="a-empty dim">Ask anything about the model, or open a neuron and press <b>explain</b>.</div></div>
+      <div id="a-thread"><div class="a-empty dim" data-i18n-html="agent.empty">Ask anything about the model, or open a neuron and press <b>explain</b>.</div></div>
       <div id="a-actions"></div>
       <div id="a-files"></div>
-      <form id="a-form"><button id="a-attach" type="button" title="attach files (or drop / paste them)" aria-label="attach">📎</button><input id="a-file" type="file" multiple hidden><textarea id="a-input" rows="1" placeholder="Ask Claude…" title="while Claude works: Enter interrupts and sends, ⌘/Ctrl+Enter queues" spellcheck="false"></textarea><button id="a-send" type="submit" aria-label="send">↑</button></form>
+      <form id="a-form"><button id="a-attach" type="button" title="attach files (or drop / paste them)" aria-label="attach" data-i18n-title="agent.attachTitle" data-i18n-aria-label="agent.attach">📎</button><input id="a-file" type="file" multiple hidden><textarea id="a-input" rows="1" placeholder="Ask Claude…" title="while Claude works: Enter interrupts and sends, ⌘/Ctrl+Enter queues" spellcheck="false" data-i18n-placeholder="agent.ask" data-i18n-title="agent.inputTitle"></textarea><button id="a-send" type="submit" aria-label="send" data-i18n-aria-label="agent.send">↑</button></form>
     </div>
   </aside>
 </main>
 <div id="tour" hidden><div id="tour-ring"></div><div id="tour-card" role="dialog" aria-label="tour"></div></div>
-<script type="module" src="app.js?v=151"></script>
+<script type="module" src="app.js?v=152"></script>
 </body>
 </html>

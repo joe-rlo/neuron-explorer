@@ -28,6 +28,8 @@ import lab  # noqa: E402
 import learn  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
+# the agent's neuronary.org tools (agent_mcp.py) read the person's token from here when set
+NEURONARY_ENV = {k: os.environ[k] for k in ("NEURONARY_TOKEN", "NEURONARY_API") if os.environ.get(k)}
 NAMES = os.path.join(ROOT, "explorer", "names.json")
 PORT = int(os.environ.get("PORT", 8791))
 _cfg = AutoConfig.from_pretrained("Qwen/Qwen3.5-4B").get_text_config()
@@ -2004,7 +2006,8 @@ def _live_off():
 
 @app.post("/api/agent/steer")
 async def agent_steer(req: Request):
-    """Steered rollouts for Claude: one prompt, greedy, pushed up / unsteered / pushed down; whole texts at once."""
+    """Steered rollouts for Claude: one prompt, pushed up / unsteered / pushed down; whole texts at once. Greedy unless
+    `temperature` is set; `repetition_penalty`, `seed` and `min_p` as in runtime.steer_multi."""
     b = await req.json()
     if off := _live_off():
         return off
@@ -2014,12 +2017,16 @@ async def agent_steer(req: Request):
     items = b.get("neurons") or [{"layer": b["layer"], "n": b["n"]}]
     pushes = [(int(x["layer"]), int(x["n"]), float(x.get("dose", dose)), x.get("mode", mode)) for x in items]
 
+    samp = {"temperature": float(b.get("temperature") or 0), "repetition_penalty": float(b.get("repetition_penalty") or 1.0),
+            "seed": int(b.get("seed") or 0), "min_p": float(b.get("min_p") or 0)}
+
     def work():
-        for row, delta in rt.steer_multi(pushes, [[{"role": "user", "content": b["prompt"]}]] * 3, int(b.get("max_new", 150))):
+        for row, delta in rt.steer_multi(pushes, [[{"role": "user", "content": b["prompt"]}]] * 3, int(b.get("max_new", 150)), **samp):
             if row is not None:
                 texts[row] += delta
     await asyncio.to_thread(work)
     return {"prompt": b["prompt"], "steered": [{"neuron": f"L{l} N{n}", "dose": d, "mode": m} for l, n, d, m in pushes],
+            "sampling": samp if samp["temperature"] or samp["repetition_penalty"] != 1.0 else "greedy",
             "up": texts[0], "baseline": texts[1], "down": texts[2]}
 
 
@@ -2519,7 +2526,7 @@ CHAT_IDLE = 30 * 60  # seconds without listeners or turns before a chat's input 
 
 def _claude_cmd(cid):
     mcp = {"mcpServers": {"explorer": {"command": sys.executable, "args": [os.path.join(ROOT, "explorer", "agent_mcp.py")],
-                                       "env": {"EXPLORER_URL": f"http://127.0.0.1:{PORT}", "EXPLORER_CHAT": cid}}}}
+                                       "env": {"EXPLORER_URL": f"http://127.0.0.1:{PORT}", "EXPLORER_CHAT": cid, **NEURONARY_ENV}}}}
     cmd = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
            "--system-prompt-file", agent_prompt_file(), "--mcp-config", json.dumps(mcp), "--strict-mcp-config",
            # file tools and a shell, so it can run scripts against this server (e.g. score a file it shouldn't read)
@@ -2756,7 +2763,7 @@ async def _ensure_codex(c):
     c["pump"] = asyncio.create_task(_codex_pump(c, proc))
     await _rpc(c, "initialize", {"clientInfo": {"name": "neuron-explorer", "version": "0.1"}})
     mcp = {"explorer": {"command": sys.executable, "args": [os.path.join(ROOT, "explorer", "agent_mcp.py")],
-                        "env": {"EXPLORER_URL": f"http://127.0.0.1:{PORT}", "EXPLORER_CHAT": c["session"]}}}
+                        "env": {"EXPLORER_URL": f"http://127.0.0.1:{PORT}", "EXPLORER_CHAT": c["session"], **NEURONARY_ENV}}}
     opts = {"cwd": AGENT_DIR, "approvalPolicy": "never", "sandbox": "danger-full-access", "config": {"mcp_servers": mcp},
             "developerInstructions": open(agent_prompt_file()).read() + CODEX_NOTE.replace("{ROOT}", ROOT)}
     thread = _meta().get(c["session"], {}).get("thread")
@@ -2767,7 +2774,20 @@ async def _ensure_codex(c):
     return proc
 
 
+def _agent_files_mtime():
+    """When the agent's tools or instructions last changed (agent_mcp.py and the prompt files)."""
+    paths = [os.path.join(ROOT, "explorer", "agent_mcp.py"), AGENT_PROMPT, AGENT_METHOD, AGENT_LOCAL]
+    return max((os.path.getmtime(x) for x in paths if os.path.exists(x)), default=0)
+
+
 async def _ensure_proc(c):
+    import time
+    # a chat between turns picks up changed tools or instructions: its process restarts, resuming the conversation
+    proc = c.get("proc")
+    if proc is not None and proc.returncode is None and not c["busy"] and c.get("spawned", 0) < _agent_files_mtime():
+        await _end_chat(c)
+    if c.get("proc") is None or c["proc"].returncode is not None:
+        c["spawned"] = time.time()
     if c["agent"] == "codex":
         return await _ensure_codex(c)
     proc = c.get("proc")
@@ -2935,4 +2955,5 @@ def preload():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=PORT)
+    # chat event streams stay open indefinitely; on shutdown, close them after a few seconds instead of waiting
+    uvicorn.run(app, host="127.0.0.1", port=PORT, timeout_graceful_shutdown=3)

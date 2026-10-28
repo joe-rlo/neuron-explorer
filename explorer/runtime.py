@@ -586,13 +586,16 @@ class Runtime:
         Yields (row, text_delta), then (None, [token ids per row])."""
         yield from self.steer_multi([(layer, n, dose, mode)], rows_messages, max_new, cancel)
 
-    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None):
+    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None, temperature=0.0, repetition_penalty=1.0, seed=0, min_p=0.0):
         """steer_stream for any number of neurons at once: pushes = [(layer, n, dose, mode)], all applied together.
-        Each is reversed in row 2 the same way a single neuron is (add: -dose; mul: x -dose)."""
+        Each is reversed in row 2 the same way a single neuron is (add: -dose; mul: x -dose). Greedy by default; with
+        temperature > 0 every row samples with the same `seed` (so a run repeats exactly); min_p and
+        repetition_penalty as in generate()."""
         self.ensure_loaded()
         with self.lock:
             push = [self._push_entry(layer, n, dose, mode, (1, 0, -1)) for layer, n, dose, mode in pushes]
-        yield from self.generate(push, rows_messages, max_new, cancel)
+        yield from self.generate(push, rows_messages, max_new, cancel, [seed] * len(rows_messages), temperature,
+                                 repetition_penalty, min_p)
 
     def push_rows(self, layer, n, mode, values):
         """One neuron's push with an explicit dose per batch row, in the user's units: add values are multiples of
@@ -607,12 +610,15 @@ class Runtime:
             vals = [v * unit for v in values]
         return (layer, n, mode, torch.tensor(vals, device=self.dev))
 
-    def generate(self, push, rows_messages, max_new=200, cancel=None, seeds=None, temperature=0.0):
+    def generate(self, push, rows_messages, max_new=200, cancel=None, seeds=None, temperature=0.0, repetition_penalty=1.0,
+                 min_p=0.0):
         """Decodes every row of a batch, each with its own message list (left-padded), under `push` (entries from
         push_rows / _push_entry, one value per row). temperature 0 is greedy. Otherwise row r samples by inverse CDF
         from its own generator seeded seeds[r], drawing one uniform per step whether or not it has finished, so rows
-        that share a seed share every draw (paired samples stay on the same tokens until a push tips one).
-        Yields (row, text_delta), then (None, [token ids per row])."""
+        that share a seed share every draw (paired samples stay on the same tokens until a push tips one); min_p > 0
+        keeps only tokens with at least min_p times the top token's probability. repetition_penalty > 1 divides
+        positive logits (multiplies negative ones) of every token already in the row's prompt or output, as in
+        transformers. Yields (row, text_delta), then (None, [token ids per row])."""
         self.ensure_loaded()
         with self.lock:
             if cancel is not None and cancel.is_set():
@@ -629,6 +635,11 @@ class Runtime:
                 pos = (mask.cumsum(-1) - 1).clamp(min=0)
                 eos = self.tok.convert_tokens_to_ids("<|im_end|>")
                 done, out_ids, sent = [False] * B, [[] for _ in range(B)], [""] * B
+                seen = None
+                if repetition_penalty != 1.0:
+                    seen = torch.zeros(B, self.model.lm_head.out_features, dtype=torch.bool, device=self.dev)
+                    for r, q in enumerate(seqs):
+                        seen[r, torch.tensor(q, device=self.dev)] = True
                 self._push = push or None
                 with torch.inference_mode():
                     out = self.model(input_ids=ids, attention_mask=mask, position_ids=pos, use_cache=True,
@@ -636,15 +647,23 @@ class Runtime:
                     for _ in range(max_new):
                         if cancel is not None and cancel.is_set():
                             break
+                        logits = out.logits[:, -1].float()
+                        if seen is not None:
+                            logits = torch.where(seen, torch.where(logits > 0, logits / repetition_penalty, logits * repetition_penalty), logits)
                         if gens is None:
-                            nxt = out.logits[:, -1].argmax(-1)
+                            nxt = logits.argmax(-1)
                         else:
+                            probs = torch.softmax(logits / temperature, -1)
+                            if min_p > 0:
+                                probs = torch.where(probs >= min_p * probs.max(-1, keepdim=True).values, probs, 0.0)
                             # cumulative probabilities on the CPU in float64, so the draw maps to the same token on
                             # any device once the logits agree
-                            cdf = torch.softmax(out.logits[:, -1].float() / temperature, -1).cpu().double().cumsum(-1)
+                            cdf = probs.cpu().double().cumsum(-1)
                             u = torch.tensor([g.random() for g in gens], dtype=torch.float64)[:, None] * cdf[:, -1:]
                             pick = torch.searchsorted(cdf, u).clamp(max=cdf.shape[1] - 1)[:, 0]
                             nxt = pick.to(self.dev)
+                        if seen is not None:
+                            seen[torch.arange(B, device=self.dev), nxt] = True
                         for r in range(B):
                             if done[r]:
                                 continue

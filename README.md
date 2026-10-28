@@ -22,6 +22,9 @@ steered chat, lens, connections and live inference over your own text.
 - **neuron**: steered rollouts per prompt and dose, a three-column multi-turn steered chat (−, 0, +), lens and
   connections, and a name.
 - **embeddings**: UMAP of a layer's rollouts, coloured by neuron, prompt, dose or kind.
+- **language**: the interface follows the browser language on first visit; the menu at the right of the header
+  switches between English and Simplified Chinese (the choice is kept in this browser). Translations live in
+  `explorer/static/i18n.js`.
 - **Claude** (fourth neuron-panel tab, or the right-edge handle): a chat running the `claude` CLI (installed and
   logged in) with the explorer as an MCP server (`explorer/agent_mcp.py`). It reads neurons, cones and lenses, runs the
   live model (steering, activations, next-token logprobs, ablations), moves the map, list and highlights, and has file
@@ -59,3 +62,7 @@ and {free} × {+3}, plus one unsteered baseline per prompt.
 | `sweep/capture_prefill.py` | `captures/<run>.mlp_in.npy`: MLP input at the last prompt token at the run's capture layers, steered |
 
 `research_log.md` holds the findings and reasoning; `NOTES.md` the source notes.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

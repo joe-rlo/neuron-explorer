@@ -1,5 +1,6 @@
 import { createMap } from "./map3d.js?v=78";
 import { createScatter } from "./scatter.js?v=39";
+import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=1";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -7,12 +8,13 @@ const api = async (p, body) => {
   if (!r.ok) throw new Error(`${p.split("?")[0]} ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return r.json();
 };
+initI18n($("#lang"));
 addEventListener("unhandledrejection", e => { const el = document.querySelector("#status"); if (el) el.textContent = String(e.reason?.message || e.reason); });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDose = d => (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d);
 
 let agentSelecting = false, agentMarked = false;  // Claude's selections and marks (see agentUi); declared early, openNeuron reads them on load
-const state = { layer: null, units: {}, unitMap: {}, focus: null, view: "map", chat: { mode: "add", dir: "writes", dose: { add: 0.8, mul: 2 } } };
+const state = { layer: null, units: {}, unitMap: {}, focus: null, unit: null, view: "map", chat: { mode: "add", dir: "writes", dose: { add: 0.8, mul: 2 } } };
 const ADD_STEPS = [...Array.from({ length: 30 }, (_, i) => +((i + 1) * 0.05).toFixed(2)), 1.75, 2, 2.5, 3, 4, 5];
 const MUL_STEPS = [...Array.from({ length: 9 }, (_, i) => i * 0.5), 5, 6, 8, 12, 16];
 
@@ -27,7 +29,7 @@ const map = createMap($("#map"), $("#layer-labels"), arch, {
   onPickLayer: l => { if (l !== state.layer) { layerSel.value = l; setLayer(l); } },
   onLayerMode: l => {
     $("#layer-back").classList.toggle("on", l !== null);
-    $("#layer-back").textContent = l !== null ? `‹ all layers  ·  L${l}` : "";
+    $("#layer-back").textContent = l !== null ? t("map.allLayers", { l }) : "";
     if (l !== null && l !== state.layer) setLayer(l);
   },
   onHover: (p, x, y) => {
@@ -56,10 +58,10 @@ const map = createMap($("#map"), $("#layer-labels"), arch, {
     if (p.type === "block") {
       if (hoverKey) { hoverKey = null; map.setHoverConnections(null); }
       const full = p.full;
-      return showTip(x, y, `L${p.layer}`, full ? `full attention · ${arch.attn_heads} q / ${arch.kv_heads} kv heads` : `linear attention · ${arch.linear_k_heads} k / ${arch.linear_v_heads} v heads`);
+      return showTip(x, y, `L${p.layer}`, full ? t("map.fullAttention", { q: arch.attn_heads, kv: arch.kv_heads }) : t("map.linearAttention", { k: arch.linear_k_heads, v: arch.linear_v_heads }));
     }
     const u = state.unitMap[p.layer]?.get(p.n), key = `${p.layer}/${p.n}`;
-    const head = `L${p.layer} N${p.n}${u ? `  mass ${u.z.toFixed(1)}` : ""}`;
+    const head = `L${p.layer} N${p.n}${u ? `  ${t("map.mass", { z: u.z.toFixed(1) })}` : ""}`;
     const body = () => {
       const h = hoverCache.get(key), rows = [];
       if (u?.name) rows.push(`<div class="tname">${esc(u.name)}</div>`);
@@ -144,7 +146,8 @@ async function refreshWeb() {
   webKey = key;
   const r = await fetch(`/api/web?layer=${f.layer}&n=${f.n}&first=${first}&k=${k}&hops=${hops}`);
   if (!r.ok || webKey !== key) return;
-  $("#web-z").title = `web: the open neuron's top links each way (later hops follow ${k}) · ${r.headers.get("X-Web-Total")} links`;
+  state.webTitle = { k, n: r.headers.get("X-Web-Total") };
+  $("#web-z").title = t("web.title", state.webTitle);
   map.setWeb(new Int16Array(await r.arrayBuffer()));
   const sum = await api(`/api/web/summary?layer=${f.layer}&n=${f.n}&first=${first}&k=${k}&hops=${hops}&top=24`);
   if (webKey !== key) return;
@@ -160,7 +163,7 @@ const scatter = createScatter($("#scatter"), {
   onHover: async (i, x, y) => {
     if (i < 0) { scatterHover = null; return hideTip(); }
     const d = scatter.data, layer = d.layer, key = `${layer}/${d.row[i]}`;
-    const head = `${d.kind[i] === "baseline" ? "baseline" : (d.kind[i] === "random" ? "random " : "N") + d.neuron[i]} · ${d.prompt[i]} · ${fmtDose(d.dose[i])}`;
+    const head = `${d.kind[i] === "baseline" ? t("scatter.baseline") : (d.kind[i] === "random" ? t("scatter.random") + " " : "N") + d.neuron[i]} · ${d.prompt[i]} · ${fmtDose(d.dose[i])}`;
     scatterHover = key;
     if (rolloutCache.has(key)) return showTip(x, y, head, rolloutCache.get(key));
     showTip(x, y, head, "…");
@@ -250,7 +253,7 @@ state.qMode = "lens";
 document.querySelectorAll("#q-mode button").forEach(b => b.onclick = e => {
   state.qMode = b.dataset.q;
   document.querySelectorAll("#q-mode button").forEach(x => x.classList.toggle("on", x === b));
-  $("#lens-q").placeholder = state.qMode === "fires" ? "text: golden gate bridge" : "search lens";
+  syncPlaceholders();
   if (e.isTrusted) {
     showLeft(state.qMode === "fires" ? "run" : "net");
     if (state.qMode === "fires" && document.activeElement !== $("#inf-text")) $("#inf-text").focus();
@@ -267,6 +270,10 @@ $("#inf-minus").addEventListener("input", () => {
   clearTimeout(lensTimer); lensTimer = setTimeout(runLensSearch, 700);
 });
 $("#lens-q").addEventListener("input", () => { if (state.qMode === "fires" && document.activeElement === $("#lens-q")) $("#inf-text").value = $("#lens-q").value; });
+function syncPlaceholders() {
+  $("#lens-q").placeholder = state.qMode === "fires" ? t("header.searchText") : t("header.searchLens");
+  $("#c-input").placeholder = state.chat.dir === "reads" ? t("chat.textToRead") : t("chat.who");
+}
 // fires: run text through the model once, then filter what fired without re-running
 state.inf = { text: null, pos: -1, sign: "both" };
 let qGen = 0;
@@ -276,10 +283,10 @@ async function runInfer(text, g) {
   markLeftFresh("run");
   const minus = minusTexts(), key = JSON.stringify([text, minus]);
   if (key !== state.inf.key) {
-    $("#run-rows").innerHTML = `<li class="head">running${minus.length ? ` with ${minus.length} minus text${minus.length > 1 ? "s" : ""}` : ""}…</li>`;
+    $("#run-rows").innerHTML = `<li class="head">${minus.length ? `running with ${minus.length} minus text${minus.length > 1 ? "s" : ""}…` : t("results.running")}</li>`;
     const r = await api("/api/infer", { text, minus });
     if (!stillWanted(g, "fires", text) || JSON.stringify(minusTexts()) !== JSON.stringify(minus)) return;
-    if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(state.statusText || "measuring neuron ranges")}</li>`; return; }
+    if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.measuring"))}</li>`; return; }
     state.inf = { ...state.inf, text, key, pos: -1, tokens: r.tokens };
     $("#inf-toks").innerHTML = r.tokens.map((t, i) => `<button data-i="${r.pos[i]}">${esc(t)}</button>`).join("");
   }
@@ -405,13 +412,14 @@ $("#sort").onchange = renderList;
 function webSummaryHTML() {
   const w = state.webSum, f = state.focus;
   if (!w || !f || f.kind !== "neuron" || w.layer !== f.layer || w.n !== f.n) return "";
-  const chips = list => list.length ? list.map(t => `<span class="chip" data-q="${esc(t.tok)}" title="${t.n} neurons · score ${t.w}">${esc(t.tok)}<i>${t.n}</i></span>`).join("")
-    : `<span class="faint">nothing above chance</span>`;
-  return `<div class="head">web of L${w.layer} N${w.n} · ${w.links} links · ${w.src} lens, ranked by lift over each layer</div>
-    <div class="wsum"><div class="lab"><span class="sw up"></span>fed by · ${w.up.neurons} upstream neurons</div><div class="chips">${chips(w.up.fed_by)}</div></div>
-    <div class="wsum"><div class="lab"><span class="sw down"></span>held back by</div><div class="chips">${chips(w.up.held_by || [])}</div></div>
-    <div class="wsum"><div class="lab"><span class="sw up"></span>feeds → pushes toward · ${w.down.neurons} downstream neurons</div><div class="chips">${chips(w.down.toward)}</div></div>
-    <div class="wsum"><div class="lab"><span class="sw down"></span>feeds → pushes away from</div><div class="chips">${chips(w.down.away)}</div></div>`;
+  const chips = list => list.length ? list.map(x => `<span class="chip" data-q="${esc(x.tok)}" title="${esc(t("web.chipTitle", { n: x.n, w: x.w }))}">${esc(x.tok)}<i>${x.n}</i></span>`).join("")
+    : `<span class="faint">${t("web.nothing")}</span>`;
+  const src = w.src === "steer" ? t("web.srcSteer") : t("web.srcLogit");
+  return `<div class="head">${t("web.head", { layer: w.layer, n: w.n, links: w.links, src })}</div>
+    <div class="wsum"><div class="lab"><span class="sw up"></span>${t("web.fedBy", { n: w.up.neurons })}</div><div class="chips">${chips(w.up.fed_by)}</div></div>
+    <div class="wsum"><div class="lab"><span class="sw down"></span>${t("web.heldBy")}</div><div class="chips">${chips(w.up.held_by || [])}</div></div>
+    <div class="wsum"><div class="lab"><span class="sw up"></span>${t("web.toward", { n: w.down.neurons })}</div><div class="chips">${chips(w.down.toward)}</div></div>
+    <div class="wsum"><div class="lab"><span class="sw down"></span>${t("web.away")}</div><div class="chips">${chips(w.down.away)}</div></div>`;
 }
 // the open neuron's heads by role: later heads whose query, key or value reads it, and heads whose output it reads
 function nheadsHTML() {
@@ -420,7 +428,7 @@ function nheadsHTML() {
   const name = x => `L${x.layer} h${x.heads.length > 1 ? `${x.heads[0]}–${x.heads.at(-1)}` : x.head}`;
   const row = r => `<div class="lrow"><span class="sgn">${r}</span><div class="chips">${(H.roles[r] || []).filter(x => x.z >= 2).map(x =>
     `<span class="chip" data-l="${x.layer}" data-h="${x.head}">${name(x)}<i>${x.z}</i></span>`).join("")}</div></div>`;
-  return `<div class="wsum"><div class="lab">heads</div>${["q", "k", "v", "o"].map(row).join("")}</div>`;
+  return `<div class="wsum"><div class="lab">${t("lens.heads")}</div>${["q", "k", "v", "o"].map(row).join("")}</div>`;
 }
 // the open neuron's own lenses (what it writes), above its web (what its cone does)
 function lensHTML() {
@@ -429,8 +437,8 @@ function lensHTML() {
   const chips = ts => ts.slice(0, 12).map(t => `<span class="chip" data-q="${esc(t.trim() || t)}">${esc(t)}</span>`).join("");
   const pair = (up, down) => `<div class="lrow"><span class="sgn up">+</span><div class="chips">${chips(up)}</div></div>
     <div class="lrow"><span class="sgn down">−</span><div class="chips">${chips(down)}</div></div>`;
-  return (L.steer_up ? `<div class="wsum"><div class="lab">steer lens · KL ${L.kl_up} / ${L.kl_down}</div>${pair(L.steer_up, L.steer_down)}</div>` : "")
-    + `<div class="wsum"><div class="lab">logit lens</div>${pair(L.up, L.down)}</div>`;
+  return (L.steer_up ? `<div class="wsum"><div class="lab">${t("lens.steer", { up: L.kl_up, down: L.kl_down })}</div>${pair(L.steer_up, L.steer_down)}</div>` : "")
+    + `<div class="wsum"><div class="lab">${t("lens.logit")}</div>${pair(L.up, L.down)}</div>`;
 }
 // a head's strongest neurons in each role, as map links
 const ROLE_COL = { q: "#73ff8c", k: "#b399ff", v: "#66d9ff", o: "#66d9ff" };
@@ -475,12 +483,12 @@ function renderList() {
 }
 // lens hits (net tab) or what fired (run tab)
 function renderResults(r, ol) {
-  if (!r.ready) { ol.innerHTML = `<li class="head">${esc(state.statusText || "indexing lens")}</li>`; return; }
+  if (!r.ready) { ol.innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.indexing"))}</li>`; return; }
   const rows = (r.results || []).map(x => `<li class="res${x.swept === false ? " unswept" : ""}" data-l="${x.layer}" data-n="${x.n}" data-kind="neuron">
     <span class="n">L${x.layer} N${x.n}</span><span class="sg ${x.sign === "+" ? "up" : "down"}">${r.fires ? `${x.sign === "+" ? "" : "−"}${x.score.toFixed(1)}×` : `${x.sign === "+" ? "+" : "−"}${x.rank + 1}`}</span>
     <span class="w">${x.main != null ? `<span class="raw" title="score on the text · mean score on the minus texts">${x.main.toFixed(1)} − ${x.minus.toFixed(1)}</span>` : ""}${r.fires ? `<span class="tk">"${esc(x.token)}"</span>` : ""}${x.name ? `<b>${esc(x.name)}</b> ` : ""}${esc(x.lens.join(" "))}</span></li>`).join("");
   const head = r.contrast ? `${r.total ?? 0} neurons pass · contrast = score on the text − mean score on ${r.contrast} minus text${r.contrast > 1 ? "s" : ""}`
-    : r.fires ? `${r.total ?? 0} neurons pass · score = activation ÷ its typical extreme` : `${r.total ?? 0} neurons · ${r.tokens ?? 0} tokens`;
+    : r.fires ? t("results.pass", { total: r.total ?? 0 }) : t("results.summary", { total: r.total ?? 0, tokens: r.tokens ?? 0 });
   // both signs are strong responses; the sign is only the direction
   const why = r.fires ? "−2× is as strong as +2×: the neuron fires negatively instead. The sign shows direction, not strength."
     : "+n: the token ranks nth among what this neuron pushes toward; −n: nth among what it pushes away from. Both mean a strong link; the sign shows direction.";
@@ -609,13 +617,13 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   if (!agentSelecting) clearAgentMarks();
   flushName();
   if (running) running.abort();
-  state.focus = { layer, n, kind };
+  state.focus = { layer, n, kind }; state.unit = null;
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
   if (map.layerMode !== null && map.layerMode !== layer) map.enterLayer(layer);
   if (push && kind === "neuron") saveFocus();
   focusEl.classList.add("on"); $("#list").classList.add("has-focus");
   setFocusCollapsed(false);
-  $("#f-id").textContent = kind === "random" ? `L${layer} random ${n}` : `L${layer} N${n}`;
+  $("#f-id").textContent = kind === "random" ? t("focus.idRandom", { layer, n }) : `L${layer} N${n}`;
   $("#f-rank").textContent = "";
   setNameField(state.unitMap[layer]?.get(n)?.name || "");
   $("#f-name").disabled = kind !== "neuron";
@@ -630,8 +638,9 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   refreshWeb(); renderAgentActions();
   const u = await api(`/api/unit?layer=${layer}&n=${n}&kind=${kind}`);
   if (!isFocus(layer, n, kind)) return;
+  state.unit = u;
   setNameField(u.name || "");
-  if (u.stats) $("#f-rank").textContent = `#${u.rank ?? "—"}/${u.n_ranked}  mass ${(u.stats.mass ?? u.stats.z).toFixed(1)}  null ${(u.stats.null_pct * 100).toFixed(0)}%`;
+  if (u.stats) $("#f-rank").textContent = t("focus.rank", { rank: u.rank ?? "—", n: u.n_ranked, mass: (u.stats.mass ?? u.stats.z).toFixed(1), nullPct: (u.stats.null_pct * 100).toFixed(0) });
   renderExamples(u);
   renderDetails(u);
   if (kind === "neuron") renderTuning();
@@ -658,7 +667,7 @@ async function openHead(layer, head) {
   if (!agentSelecting) clearAgentMarks();
   flushName();
   if (running) running.abort();
-  state.focus = { layer, n: head, kind: "head" };
+  state.focus = { layer, n: head, kind: "head" }; state.unit = null;
   saveFocus();
   map.select(null); scatter.select(null, null); map.selectHead(layer, head);
   $("#list").classList.add("has-focus");
@@ -711,13 +720,13 @@ function renderDetails(u) {
   const s = u.stats;
   let h = "";
   if (s) {
-    h += `<div class="lab">words</div><div class="crumbs">` + s.words.map(([w, c, z]) =>
-      `<span class="tok" title="${c} rollouts · z ${z.toFixed(1)} · ${esc((s.per_prompt[w] || []).join(" "))}">${esc(w)}</span>`).join("") + `</div>`;
-    h += `<table class="dtable"><tr><th class="num">dose</th><th class="num">push</th><th class="num">distinct-4</th><th class="num">capped</th><th class="num">logprob</th></tr>` +
+    h += `<div class="lab">${t("details.words")}</div><div class="crumbs">` + s.words.map(([w, c, z]) =>
+      `<span class="tok" title="${esc(t("details.rollouts", { n: c, z: z.toFixed(1), prompts: (s.per_prompt[w] || []).join(" ") }))}">${esc(w)}</span>`).join("") + `</div>`;
+    h += `<table class="dtable"><tr><th class="num">${t("details.dose")}</th><th class="num">${t("details.push")}</th><th class="num">${t("details.distinct")}</th><th class="num">${t("details.capped")}</th><th class="num">${t("details.logprob")}</th></tr>` +
       Object.entries(s.dose).map(([d, v]) => `<tr><td class="num">${d}</td><td class="num">${v.rel_push.toFixed(2)}</td><td class="num">${v.distinct4.toFixed(2)}</td><td class="num">${(v.capped * 100).toFixed(0)}%</td><td class="num">${v.logprob.toFixed(2)}</td></tr>`).join("") + `</table>`;
   }
   if (u.kind === "neuron") h += `<div class="fg-link"><button type="button" id="d-guide" class="dim" title="this neuron's field guide card: your hypothesis and notes with everything run on it">field guide card ›</button></div>`;
-  h += `<div id="d-window"></div><div id="d-results"></div><div id="d-lens" class="slot">—</div><div class="lab" style="margin-top:18px">connections</div><div id="d-con" class="slot">—</div>`;
+  h += `<div id="d-window"></div><div id="d-results"></div><div id="d-lens" class="slot">—</div><div class="lab" style="margin-top:18px">${t("details.connections")}</div><div id="d-con" class="slot">—</div>`;
   $("#tab-details").innerHTML = h;
   renderWindow();
 }
@@ -735,19 +744,28 @@ async function loadLive(layer, n) {
     map.setConnections(con); state.con = con; renderConnections();
   }, err => { if (isFocus(layer, n, "neuron") && $("#d-con")) $("#d-con").textContent = err.message; });
   if (!lens) return;
-  state.lens = { ...lens, layer, n }; renderList();
-  const tok = t => `<span class="tok">${esc(t)}</span>`;
-  const steer = lens.steer_up ? `<div class="lab">steer lens</div><div class="lens"><div class="up"><div class="lab">+ push · KL ${lens.kl_up}</div>${lens.steer_up.map(tok).join("")}</div><div class="down"><div class="lab">− push · KL ${lens.kl_down}</div>${lens.steer_down.map(tok).join("")}</div></div><div class="lab" style="margin-top:14px">logit lens</div>` : "";
-  if ($("#d-lens")) $("#d-lens").outerHTML = `${steer}<div class="lens"><div class="up"><div class="lab">+</div>${lens.up.map(tok).join("")}</div><div class="down"><div class="lab">−</div>${lens.down.map(tok).join("")}</div></div>`;
-  const words = state.unitMap[layer]?.get(n)?.words || [];
+  state.lens = { ...lens, layer, n }; renderList(); renderLensDetails(); renderMeasures();
+}
+
+// the open neuron's lenses in Details and above the chat; rendered from state so a language change can redraw it
+function renderLensDetails() {
+  const L = state.lens, f = state.focus;
+  if (!L || !f || f.kind !== "neuron" || L.layer !== f.layer || L.n !== f.n) return;
+  const tok = x => `<span class="tok">${esc(x)}</span>`;
+  const steer = L.steer_up ? `<div class="lab">${t("lens.steerShort")}</div><div class="lens"><div class="up"><div class="lab">${t("lens.push", { kl: L.kl_up })}</div>${L.steer_up.map(tok).join("")}</div><div class="down"><div class="lab">${t("lens.pull", { kl: L.kl_down })}</div>${L.steer_down.map(tok).join("")}</div></div><div class="lab" style="margin-top:14px">${t("lens.logit")}</div>` : "";
+  const el = $("#d-lens");
+  if (el) {
+    el.classList.remove("slot");
+    el.innerHTML = `${steer}<div class="lens"><div class="up"><div class="lab">+</div>${L.up.map(tok).join("")}</div><div class="down"><div class="lab">−</div>${L.down.map(tok).join("")}</div></div>`;
+  }
+  const words = state.unitMap[L.layer]?.get(L.n)?.words || [];
   // the four lines above the chat: what each pushed column should lean toward, by steer lens and by logit lens
   const line = (cls, k, tip, toks) => `<div class="${cls}" title="${tip}"><span class="ll ${k.endsWith("▲") ? "up" : "down"}">${k}</span>${esc(toks.slice(0, 10).join("  "))}</div>`;
   $("#c-lens").innerHTML = (words.length ? `<div class="words">${esc(words.join("  "))}</div>` : "") +
-    (lens.steer_up ? line("", "steer ▲", "steer lens, ▲ column: tokens whose next-token odds rise most when this neuron is pushed up", lens.steer_up)
-      + line("", "steer ▼", "steer lens, ▼ column: tokens whose next-token odds rise most when this neuron is pushed down", lens.steer_down) : "") +
-    line("faintline", "logit ▲", "logit lens, ▲ column: tokens the neuron's output direction points at in the vocabulary", lens.up)
-    + line("faintline", "logit ▼", "logit lens, ▼ column: tokens the neuron's output direction points away from", lens.down);
-  renderMeasures();
+    (L.steer_up ? line("", "steer ▲", "steer lens, ▲ column: tokens whose next-token odds rise most when this neuron is pushed up", L.steer_up)
+      + line("", "steer ▼", "steer lens, ▼ column: tokens whose next-token odds rise most when this neuron is pushed down", L.steer_down) : "") +
+    line("faintline", "logit ▲", "logit lens, ▲ column: tokens the neuron's output direction points at in the vocabulary", L.up)
+    + line("faintline", "logit ▼", "logit lens, ▼ column: tokens the neuron's output direction points away from", L.down);
 }
 
 // sign = sign(g * u): the sign of the reading neuron's activation that the writing neuron's direction produces on its
@@ -764,8 +782,8 @@ function renderConnections() {
       <td class="num dim">${c.z.toFixed(0)}</td><td class="mono faint">L${c.layer}·${c.n}</td></tr>`;
   };
   el.outerHTML = `<div id="d-con-wrap">
-    <div class="lens"><div><div class="lab">writes into</div><table class="dtable">${state.con.down.slice(0, 14).map(row).join("")}</table></div>
-    <div><div class="lab">driven by</div><table class="dtable">${state.con.up.slice(0, 14).map(row).join("")}</table></div></div>
+    <div class="lens"><div><div class="lab">${t("details.writesInto")}</div><table class="dtable">${state.con.down.slice(0, 14).map(row).join("")}</table></div>
+    <div><div class="lab">${t("details.drivenBy")}</div><table class="dtable">${state.con.up.slice(0, 14).map(row).join("")}</table></div></div>
     ${headTablesHTML()}</div>`;
 }
 // the open neuron's heads in Details: later heads reading it (q / k / v) and heads it reads (o), each with what the
@@ -782,8 +800,8 @@ function headTablesHTML() {
       <td class="num dim">${x.z.toFixed(1)}</td><td class="mono faint">${id}</td></tr>`;
   };
   const rows = roles => roles.flatMap(r => (H.roles[r] || []).map(x => ({ ...x, role: r }))).filter(x => x.z >= 2).sort((a, b) => b.z - a.z);
-  return `<div class="lens"><div><div class="lab">heads reading it</div><table class="dtable">${rows(["q", "k", "v"]).slice(0, 10).map(row).join("")}</table></div>
-    <div><div class="lab">heads feeding it</div><table class="dtable">${rows(["o"]).slice(0, 10).map(row).join("")}</table></div></div>`;
+  return `<div class="lens"><div><div class="lab">${t("details.headsReading")}</div><table class="dtable">${rows(["q", "k", "v"]).slice(0, 10).map(row).join("")}</table></div>
+    <div><div class="lab">${t("details.headsFeeding")}</div><table class="dtable">${rows(["o"]).slice(0, 10).map(row).join("")}</table></div></div>`;
 }
 // opening a neuron from a list or link also centres the camera on it
 function goToNeuron(layer, n, kind = "neuron") {
@@ -840,7 +858,7 @@ document.querySelectorAll("#c-dir button").forEach(b => b.onclick = () => {
   state.chat.dir = b.dataset.d;
   document.querySelectorAll("#c-dir button").forEach(x => x.classList.toggle("on", x === b));
   $("#tab-chat").classList.toggle("reads", b.dataset.d === "reads");
-  $("#c-input").placeholder = b.dataset.d === "reads" ? "text to read" : "Who are you?";
+  syncPlaceholders();
 });
 function step(dir) {
   const steps = state.chat.mode === "mul" ? MUL_STEPS : ADD_STEPS, key = state.chat.mode;
@@ -1050,7 +1068,7 @@ $("#c-form").addEventListener("submit", async e => {
                  blind: state.chat.blind ? { order: shuffle([0, 1, 2]), property: lastProperty, target: "up", picked: null } : null };
   state.thread.push(turn); $("#c-input").value = ""; renderThread();
   const ctl = new AbortController(), thread = state.thread;
-  running = ctl; $("#c-go").textContent = "stop";
+  running = ctl; $("#c-go").textContent = t("chat.stop");
   try {
     const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
       body: JSON.stringify({ layer: f.layer, n: f.n, prompt: text, dose, mode: state.chat.mode, history,
@@ -1072,7 +1090,7 @@ $("#c-form").addEventListener("submit", async e => {
     if (err.name !== "AbortError") turn.error = String(err);
   } finally {
     turn.live = false; turn.done = [true, true, true]; turn.scoring = false;
-    if (running === ctl) { running = null; $("#c-go").textContent = "run"; }
+    if (running === ctl) { running = null; $("#c-go").textContent = t("chat.run"); }
     if (state.thread === thread) renderTurn(turn);
   }
 });
@@ -2087,7 +2105,7 @@ async function runReads(f, text) {
   let r;
   try { r = await api("/api/reads", { layer: f.layer, n: f.n, text, chat: true }); }
   catch (err) { $("#c-reads").textContent = err.message; return; }
-  finally { reading = false; $("#c-go").textContent = "run"; }
+  finally { reading = false; $("#c-go").textContent = t("chat.run"); }
   if (!isFocus(f.layer, f.n, "neuron")) return;
   const m = Math.max(1e-6, ...r.units.map(u => Math.abs(u.act)));
   $("#c-reads").innerHTML = r.units.map(u => {
@@ -2102,16 +2120,30 @@ async function pollStatus() {
   try {
     const s = await api("/api/status");
     state.statusText = s.status;
-    $("#status").textContent = s.status === "ready" ? "" : s.status;
+    $("#status").textContent = localizeStatus(s.status);
     if (s.status === "ready" && lensResults && !lensResults.ready) runLensSearch();
     setTimeout(pollStatus, s.status === "ready" ? 8000 : 2000);
   } catch {
-    $("#status").textContent = "server unreachable";
+    state.statusText = "server unreachable";
+    $("#status").textContent = t("status.unreachable");
     setTimeout(pollStatus, 2000);
   }
 }
 pollStatus();
 
+// server status strings are stable English identifiers; keep the API language-neutral and translate here
+function localizeStatus(s) {
+  if (!s || s === "ready") return "";
+  if (s === "idle") return t("status.idle");
+  if (s === "loading") return t("status.loading");
+  if (s === "no model") return t("status.noModel");
+  if (s === "server unreachable") return t("status.unreachable");
+  let m = s.match(/^indexing lens (\d+)\/(\d+)$/);
+  if (m) return t("status.indexing", { i: m[1], n: m[2] });
+  m = s.match(/^measuring neuron ranges (\d+)k\/(\d+)k tokens$/);
+  if (m) return t("status.measuring", { seen: m[1], tokens: m[2] });
+  return s;
+}
 window.__ne = { map, state, scatter };
 // ---------- start ----------
 const have = Object.keys(index.layers).map(Number);
@@ -2181,7 +2213,7 @@ function md(src) {
   if (list) out.push("</ul>");
   return out.join("");
 }
-const EMPTY = `<div class="a-empty dim">Ask anything about the model, or open a neuron and press <b>explain</b>.</div>`;
+const EMPTY = () => `<div class="a-empty dim">${t("agent.empty")}</div>`;
 // the conversation persists in this browser: chat id (= claude session, resumed server side) and the rendered thread
 const AGENT_KEY = "explorer.agent";
 function saveAgent() {
@@ -2202,26 +2234,28 @@ $("#a-agent").addEventListener("change", e => {
 function loadAgent() {
   try {
     const v = JSON.parse(localStorage.getItem(AGENT_KEY) || "null"); if (!v) return;
-    agent.chat = v.chat; $("#a-thread").innerHTML = v.html || EMPTY; setAgentKind(v.kind);
+    agent.chat = v.chat; $("#a-thread").innerHTML = v.html || EMPTY(); setAgentKind(v.kind);
     $("#a-thread").querySelectorAll("#a-usename, .a-msg.queued, .a-busy, .a-qctl").forEach(b => b.remove());
     $("#a-thread").scrollTop = $("#a-thread").scrollHeight;
     addTurnControls();
+    relabelAgentThread();
   } catch {}
 }
 // quick actions above the input, for the open neuron
 function renderAgentActions() {
   const f = state.focus;
-  $("#a-actions").innerHTML = f && f.kind === "neuron" ? `<button data-a="explain">explain L${f.layer} N${f.n}</button><button data-a="web">what does its web do?</button>`
-    : f && f.kind === "head" ? `<button data-a="explain">explain L${f.layer} h${f.n}</button>` : "";
+  const ref = f && f.kind === "head" ? `L${f.layer} h${f.n}` : f ? `L${f.layer} N${f.n}` : "";
+  $("#a-actions").innerHTML = f && f.kind === "neuron" ? `<button data-a="explain">${t("agent.explain", { ref })}</button><button data-a="web">${t("agent.web")}</button>`
+    : f && f.kind === "head" ? `<button data-a="explain">${t("agent.explain", { ref })}</button>` : "";
 }
 $("#a-actions").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b || agent.busy) return;
   if (b.dataset.a === "explain") explainFocus();
-  else if (b.dataset.a === "web") { const f = state.focus; agentTurn(`Look at the cone of L${f.layer} N${f.n} (what it reads from and writes into, a few hops out) and tell me briefly what that circuit seems to do. Highlight the neurons you mention.`, `what does the web of L${f.layer} N${f.n} do?`); }
+  else if (b.dataset.a === "web") { const f = state.focus; agentTurn(`Look at the cone of L${f.layer} N${f.n} (what it reads from and writes into, a few hops out) and tell me briefly what that circuit seems to do. Highlight the neurons you mention.`, t("agent.webShown", { ref: `L${f.layer} N${f.n}` })); }
 });
 function resetAgent() {
   closeEvents(); if (agent.busy) finishTurn();
-  agent.chat = null; $("#a-thread").innerHTML = EMPTY;
+  agent.chat = null; $("#a-thread").innerHTML = EMPTY();
   let pref = "claude"; try { pref = localStorage.getItem("explorer.agentKind") || "claude"; } catch {}
   setAgentKind(pref);
   saveAgent();
@@ -2280,9 +2314,9 @@ async function showText(text, token) {
 // a tool call as one short inline line: neuron L15 N6254 · search_lens "Sure"
 function toolLabel(name, a = {}) {
   const ref = a.layer != null && a.n != null ? `L${a.layer} N${a.n}` : a.layer != null ? `L${a.layer}` : "";
-  const short = t => (t.length > 90 ? t.slice(0, 90) + "…" : t);
+  const short = s => (s.length > 90 ? s.slice(0, 90) + "…" : s);
   const extra = a.command ? short(a.command) : a.file_path ? a.file_path.replace(/^\/Users\/[^/]+/, "~")
-    : a.pattern ? `"${a.pattern}"` : a.query ? `"${a.query}"` : a.neurons ? `${a.neurons.length} neurons` : "";
+    : a.pattern ? `"${a.pattern}"` : a.query ? `"${a.query}"` : a.neurons ? t("agent.neurons", { n: a.neurons.length }) : "";
   return [name.replace(/_/g, " "), ref, extra].filter(Boolean).join(" ");
 }
 function prettyOut(t) {
@@ -2383,36 +2417,45 @@ async function agentTurn(message, shown, shownCls = "user", atts = []) {
 }
 async function stopAgent() {
   if (!agent.busy) return;
-  const d = document.createElement("div"); d.className = "a-stopped"; d.textContent = "stopped"; putInBox(d);
+  const d = document.createElement("div"); d.className = "a-stopped"; d.textContent = t("agent.stopped"); putInBox(d);
   const r = agent.chat ? await api("/api/agent/interrupt", { chat: agent.chat }).catch(() => ({})) : {};
   if (!r.running && agent.busy) finishTurn();  // nothing running server side: settle here
 }
 function toolDetails(e) {
   const d = document.createElement("details"); d.className = "a-tool"; if (e.id) d.dataset.id = e.id;
-  d.innerHTML = `<summary>${esc(toolLabel(e.name, e.input || {}))}</summary><pre class="a-io"><b>${esc(e.name)}</b> ${esc(JSON.stringify(e.input || {}, null, 1))}</pre><pre class="a-io out">running…</pre>`;
+  d.innerHTML = `<summary>${esc(toolLabel(e.name, e.input || {}))}</summary><pre class="a-io"><b>${esc(e.name)}</b> ${esc(JSON.stringify(e.input || {}, null, 1))}</pre><pre class="a-io out running">${t("agent.running")}</pre>`;
   return d;
 }
 function fillTool(box, e) {
   const d = [...box.querySelectorAll("details.a-tool")].find(x => x.dataset.id === e.id);
-  if (d) { const o = d.querySelector(".out"); o.textContent = prettyOut(e.output); o.classList.toggle("err", e.error); }
+  if (d) { const o = d.querySelector(".out"); o.textContent = prettyOut(e.output); o.classList.remove("running"); o.classList.toggle("err", e.error); }
 }
 // ---- past chats: "past" lists the sessions on disk; picking one rebuilds its thread and later turns resume it ----
 let pastStash = null;  // the thread shown before the list opened
-const ago = t => { const s = Date.now() / 1000 - t; return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : new Date(t * 1000).toLocaleDateString(); };
+const ago = ts => {
+  const s = Date.now() / 1000 - ts;
+  return s < 3600 ? t("agent.minutesAgo", { n: Math.max(1, Math.round(s / 60)) })
+    : s < 86400 ? t("agent.hoursAgo", { n: Math.round(s / 3600) })
+    : new Date(ts * 1000).toLocaleDateString(getLang());
+};
+async function renderPastList() {
+  const th = $("#a-thread");
+  th.innerHTML = `<div class="dim">…</div>`;
+  const list = await api("/api/agent/chats");
+  if (pastStash === null) return;
+  th.innerHTML = list.length ? list.map(c => `<button class="a-pastrow${c.chat === agent.chat ? " on" : ""}" data-chat="${c.chat}" data-agent="${c.agent || "claude"}"><span class="t">${esc(c.title || "—")}</span><span class="m">${c.agent === "codex" ? "codex · " : ""}${ago(c.t)} · ${tp("agent.messages", c.turns)}</span></button>`).join("")
+    : `<div class="dim">—</div>`;
+}
 async function togglePast() {
   const th = $("#a-thread");
   if (pastStash !== null) { th.innerHTML = pastStash; pastStash = null; $("#a-past").classList.remove("on"); addTurnControls(); return; }
   pastStash = th.innerHTML; $("#a-past").classList.add("on");
-  th.innerHTML = `<div class="dim">…</div>`;
-  const list = await api("/api/agent/chats");
-  if (pastStash === null) return;
-  th.innerHTML = list.length ? list.map(c => `<button class="a-pastrow${c.chat === agent.chat ? " on" : ""}" data-chat="${c.chat}" data-agent="${c.agent || "claude"}"><span class="t">${esc(c.title || "—")}</span><span class="m">${c.agent === "codex" ? "codex · " : ""}${ago(c.t)} · ${c.turns} message${c.turns === 1 ? "" : "s"}</span></button>`).join("")
-    : `<div class="dim">—</div>`;
+  await renderPastList();
 }
 async function openPast(chat, kind) {
   const r = await api(`/api/agent/history?chat=${encodeURIComponent(chat)}`);
   pastStash = null; $("#a-past").classList.remove("on");
-  const th = $("#a-thread"); th.innerHTML = EMPTY;
+  const th = $("#a-thread"); th.innerHTML = EMPTY();
   let box = null, seg = null, segText = "";
   for (const e of r.events || []) {
     if (e.t === "user") {
@@ -2435,12 +2478,12 @@ async function openPast(chat, kind) {
 $("#a-thread").addEventListener("click", e => { const b = e.target.closest(".a-pastrow"); if (b) openPast(b.dataset.chat, b.dataset.agent); });
 async function explainFocus() {
   const f = state.focus; if (!f) return;
-  if (f.kind === "head") return agentTurn(`Explain attention head L${f.layer} h${f.n}: write the head report.`, `explain L${f.layer} h${f.n}`);
+  if (f.kind === "head") return agentTurn(`Explain attention head L${f.layer} h${f.n}: write the head report.`, t("agent.explain", { ref: `L${f.layer} h${f.n}` }));
   if (f.kind !== "neuron") return;
-  const { reply, box } = await agentTurn(`Explain L${f.layer} N${f.n}: write the autointerp report.`, `explain L${f.layer} N${f.n}`);
+  const { reply, box } = await agentTurn(`Explain L${f.layer} N${f.n}: write the autointerp report.`, t("agent.explain", { ref: `L${f.layer} N${f.n}` }));
   const name = reply.match(/\*\*Name\*\*:?\s*(.+)/)?.[1].replace(/[*`]/g, "").trim();
   if (name) {
-    const b = document.createElement("button"); b.id = "a-usename"; b.textContent = `use name: ${name}`;
+    const b = document.createElement("button"); b.id = "a-usename"; b.dataset.name = name; b.textContent = t("agent.useName", { name });
     b.onclick = () => { if (isFocus(f.layer, f.n, "neuron")) setNameField(name); saveName({ layer: f.layer, n: f.n, name }); b.remove(); };
     box.append(b);
   }
@@ -2450,23 +2493,23 @@ function sendChat() {
   if (agent.pending.some(a => !a.id) || (!msg && !agent.pending.length)) return false;
   const atts = agent.pending; agent.pending = []; renderPending();
   $("#a-input").value = ""; growInput();
-  agentTurn(msg || "(see the attached files)", msg || "(attached files)", "user", atts);
+  agentTurn(msg || "(see the attached files)", msg || t("agent.attached"), "user", atts);
   return true;
 }
 function setSendMode(busy) {
   const b = $("#a-send"); b.disabled = false; b.classList.toggle("stop", busy);
-  b.textContent = busy ? "■" : "↑"; b.title = busy ? "stop" : "send"; b.setAttribute("aria-label", busy ? "stop" : "send");
+  b.textContent = busy ? "■" : "↑"; const label = busy ? t("agent.stop") : t("agent.send"); b.title = label; b.setAttribute("aria-label", label);
 }
 
 // ---- attachments: picked, dropped or pasted files upload right away and go with the next message ----
 agent.pending = [];
 function renderPending() {
-  $("#a-files").innerHTML = agent.pending.map((a, i) => `<span class="a-file${a.id ? "" : " up"}">${esc(a.name)}<button data-i="${i}" aria-label="remove">×</button></span>`).join("");
+  $("#a-files").innerHTML = agent.pending.map((a, i) => `<span class="a-file${a.id ? "" : " up"}">${esc(a.name)}<button data-i="${i}" aria-label="${esc(t("agent.remove"))}">×</button></span>`).join("");
 }
 $("#a-files").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { agent.pending.splice(+b.dataset.i, 1); renderPending(); } });
 async function attachFiles(files) {
   for (const file of files) {
-    const a = { name: file.name || "pasted", id: null }; agent.pending.push(a); renderPending();
+    const a = { name: file.name || t("agent.pasted"), id: null }; agent.pending.push(a); renderPending();
     const data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = bad; r.readAsDataURL(file); });
     try {
       const res = await api("/api/agent/upload", { name: a.name, type: file.type, data });
@@ -2493,20 +2536,20 @@ function lastTurn() {
 }
 function addTurnControls() {
   clearTurnControls();
-  const t = lastTurn(); if (!t) return;
-  const uc = document.createElement("div"); uc.className = "a-ctl"; uc.innerHTML = `<button data-act="edit" title="remove this message and its reply, and put it back in the box">edit</button>`;
-  t.u.append(uc);
-  const a = t.after.find(x => x.classList.contains("assistant"));
-  if (a) { const ac = document.createElement("div"); ac.className = "a-ctl"; ac.innerHTML = `<button data-act="reroll" title="throw this reply away and ask again">↻ reroll</button>`; a.append(ac); }
+  const turn = lastTurn(); if (!turn) return;
+  const uc = document.createElement("div"); uc.className = "a-ctl"; uc.innerHTML = `<button data-act="edit" title="${esc(t("agent.editTitle"))}">${t("agent.edit")}</button>`;
+  turn.u.append(uc);
+  const a = turn.after.find(x => x.classList.contains("assistant"));
+  if (a) { const ac = document.createElement("div"); ac.className = "a-ctl"; ac.innerHTML = `<button data-act="reroll" title="${esc(t("agent.rerollTitle"))}">${t("agent.reroll")}</button>`; a.append(ac); }
 }
 async function rewindLast(act) {
-  const t = lastTurn(); if (!t) return;
+  const turn = lastTurn(); if (!turn) return;
   if (agent.busy) { agent.box = null; finishTurn(); }
-  const u = t.u, msg = u.dataset.msg ?? u.childNodes[0]?.textContent ?? "", shown = u.dataset.shown ?? msg;
+  const u = turn.u, msg = u.dataset.msg ?? u.childNodes[0]?.textContent ?? "", shown = u.dataset.shown ?? msg;
   const cls = u.dataset.cls || "user", atts = JSON.parse(u.dataset.att || "[]");
   if (agent.chat) { try { await api("/api/agent/rewind", { chat: agent.chat, text: msg }); } catch {} }
-  for (const x of [u, ...t.after]) x.remove();
-  if (!$("#a-thread").children.length) $("#a-thread").innerHTML = EMPTY;
+  for (const x of [u, ...turn.after]) x.remove();
+  if (!$("#a-thread").children.length) $("#a-thread").innerHTML = EMPTY();
   if (act === "reroll") agentTurn(msg, shown, cls, atts);
   else { $("#a-input").value = cls.includes("interp") || shown !== msg ? shown : msg; growInput(); agent.pending = atts; renderPending(); $("#a-input").focus(); addTurnControls(); saveAgent(); }
 }
@@ -2526,3 +2569,46 @@ $("#a-past").onclick = togglePast;
 { let pref = "claude"; try { pref = localStorage.getItem("explorer.agentKind") || "claude"; } catch {} setAgentKind(pref); }
 loadAgent(); renderAgentActions(); openEvents();
 syncEdge(); updateInsets();
+
+// ---------- language ----------
+// a switch redraws everything derived from a translated string; open neurons, searches and conversations stay put
+function relabelAgentThread() {
+  const th = $("#a-thread");
+  th.querySelectorAll(".a-empty").forEach(el => { el.innerHTML = t("agent.empty"); });
+  th.querySelectorAll(".a-stopped").forEach(el => { el.textContent = t("agent.stopped"); });
+  th.querySelectorAll("details.a-tool .a-io.out.running").forEach(el => { el.textContent = t("agent.running"); });
+  th.querySelectorAll(".a-ctl button[data-act=edit]").forEach(b => { b.textContent = t("agent.edit"); b.title = t("agent.editTitle"); });
+  th.querySelectorAll(".a-ctl button[data-act=reroll]").forEach(b => { b.textContent = t("agent.reroll"); b.title = t("agent.rerollTitle"); });
+  const un = $("#a-usename");
+  if (un) un.textContent = t("agent.useName", { name: un.dataset.name || un.textContent.replace(/^use name:\s*/, "").replace(/^使用名称：/, "") });
+}
+function relabel() {
+  hideTip();
+  applyTranslations();
+  syncPlaceholders();
+  syncEdge();
+  setAgentKind(agent.kind);
+  setSendMode(agent.busy);
+  $("#c-go").textContent = running ? t("chat.stop") : t("chat.run");
+  if (map.layerMode !== null) $("#layer-back").textContent = t("map.allLayers", { l: map.layerMode });
+  if (state.webTitle) $("#web-z").title = t("web.title", state.webTitle);
+  if (state.statusText) $("#status").textContent = localizeStatus(state.statusText);
+  const f = state.focus;
+  if (f?.kind === "random") $("#f-id").textContent = t("focus.idRandom", { layer: f.layer, n: f.n });
+  if ((f?.kind === "neuron" || f?.kind === "random") && state.unit) {
+    if (state.unit.stats) $("#f-rank").textContent = t("focus.rank", { rank: state.unit.rank ?? "—", n: state.unit.n_ranked, mass: (state.unit.stats.mass ?? state.unit.stats.z).toFixed(1), nullPct: (state.unit.stats.null_pct * 100).toFixed(0) });
+    renderExamples(state.unit);
+    renderDetails(state.unit);
+    renderLensDetails();
+    renderConnections();
+  }
+  renderList();
+  if (fireResults) renderResults(fireResults, $("#run-rows"));
+  renderAgentActions();
+  if (!running) renderThread();
+  relabelAgentThread();
+  if (agent.pending.length) renderPending();
+  if (pastStash !== null) renderPastList();
+}
+document.addEventListener("i18nchange", relabel);
+syncPlaceholders();

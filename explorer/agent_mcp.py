@@ -1,15 +1,21 @@
 """Stdio MCP server that gives the explorer's Claude chat its tools: read any neuron data through the explorer's HTTP API,
 run the live model (steered rollouts, activations) when it is loaded, and drive the map (select, highlight) in the browser that started the chat. Standard library only; started by
 `claude -p --mcp-config ...` from server.py with EXPLORER_URL and EXPLORER_CHAT set.
+
+The neuronary_* tools talk to neuronary.org (search, download, publish recipes). Reads need nothing; writes need a token
+from neuronary.org -> account menu -> API & agents, in NEURONARY_TOKEN or ~/.neuronary/token.
 """
 import json
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
 URL = os.environ.get("EXPLORER_URL", "http://127.0.0.1:8791")
 CHAT = os.environ.get("EXPLORER_CHAT", "")
+NEURONARY = os.environ.get("NEURONARY_API", "https://mcczbdcymyhzfputyqcr.supabase.co/functions/v1/api")
+MODEL = os.environ.get("EXPLORER_MODEL", "Qwen/Qwen3.5-4B")
 
 LN = {"layer": {"type": "integer", "description": "layer, 0-31"}, "n": {"type": "integer", "description": "neuron, 0-9215"}}
 HEAD = {"layer": {"type": "integer", "description": "layer, 0-31"}, "head": {"type": "integer", "description": "head: 0-15 on full-attention layers, 0-31 on linear-attention layers"}}
@@ -57,7 +63,8 @@ TOOLS = [
      "and pushed down (greedy). Steer one neuron (layer, n) or several at once (neurons: [{layer, n, dose?, mode?}]; all "
      "are applied together, each reversed in the down row; a negative per-neuron dose pushes that one the other way). "
      "dose in units of the layer's median residual norm for mode 'add' (0.8 is the steer-lens push; 2-3 is strong), or "
-     "a multiplier for mode 'mul'. Needs the live model; errors if it is off.",
+     "a multiplier for mode 'mul'. Greedy by default; temperature, min_p, repetition_penalty and seed match a recipe's published "
+     "sampling (the result says which was used). Needs the live model; errors if it is off.",
      "inputSchema": {"type": "object", "properties": {**LN, "prompt": {"type": "string"},
                                                        "neurons": {"type": "array", "items": {"type": "object", "properties": {
                                                            **LN, "dose": {"type": "number"},
@@ -65,7 +72,15 @@ TOOLS = [
                                                            "required": ["layer", "n"]}},
                                                        "dose": {"type": "number", "default": 0.8},
                                                        "mode": {"type": "string", "enum": ["add", "mul"], "default": "add"},
-                                                       "max_new": {"type": "integer", "default": 150}},
+                                                       "max_new": {"type": "integer", "default": 150},
+                                                       "temperature": {"type": "number", "default": 0,
+                                                                       "description": "0 = greedy; e.g. 0.7 to match a recipe's sampling"},
+                                                       "repetition_penalty": {"type": "number", "default": 1.0,
+                                                                              "description": "e.g. 1.1; >1 discourages repeats (loops)"},
+                                                       "min_p": {"type": "number", "default": 0,
+                                                                 "description": "with temperature: drop tokens below min_p x the top token's probability, e.g. 0.05"},
+                                                       "seed": {"type": "integer", "default": 0,
+                                                                "description": "each row samples with this seed, so a run repeats exactly"}},
                      "required": ["prompt"]}},
     {"name": "activations", "description": "Live: the neuron's raw activation on every token of a text (chat=true wraps "
      "it as a user turn). Compare against act_range from `neuron`. Optional `neurons` [{layer, n, dose?, mode?}] are "
@@ -184,6 +199,62 @@ TOOLS = [
     {"name": "select_head", "description": "Open an attention head in the explorer: its q / k / v / o panel, and its "
      "links on the map.",
      "inputSchema": {"type": "object", "properties": HEAD, "required": ["layer", "head"]}},
+    {"name": "neuronary_search", "description": "Search neuronary.org, the public dictionary of neuron steering recipes. "
+     "Free text matches names, descriptions, tags and authors; neuron ids like 'L14 N8949' or 'L14N8949' match recipes "
+     "that use that neuron. Use it to see whether a neuron already has known recipes, or before publishing.",
+     "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}, "tag": {"type": "string"},
+                                                       "author": {"type": "string"},
+                                                       "sort": {"type": "string", "enum": ["top", "new", "hot"]},
+                                                       "limit": {"type": "integer", "default": 20}}}},
+    {"name": "neuronary_get", "description": "Download one neuronary recipe: neurons and doses (as `steer_neurons`, ready "
+     "for the `steer` tool's `neurons`: same dose units), recommended sampling, examples, notes.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
+    {"name": "neuronary_publish", "description": "Publish a recipe to neuronary.org under the person's account. Only when "
+     "the person asks or agrees. Doses are in the same units as `steer` (median residual norm, mode add). Examples must be "
+     "real `steer` outputs, verbatim: the prompt, the pushed-up text as output and the unsteered text as base_output. Put "
+     "a needed repetition penalty or temperature in sampling. Returns the recipe's URL.",
+     "inputSchema": {"type": "object", "properties": {
+         "name": {"type": "string", "description": "short, e.g. 'Evil Qwen'"},
+         "description": {"type": "string", "description": "what it does, one or two sentences"},
+         "neurons": {"type": "array", "items": {"type": "object", "properties": {**LN, "dose": {"type": "number"}},
+                                                "required": ["layer", "n", "dose"]}},
+         "tags": {"type": "array", "items": {"type": "string"}},
+         "examples": {"type": "array", "items": {"type": "object", "properties": {
+             "prompt": {"type": "string"}, "output": {"type": "string"}, "base_output": {"type": "string"}},
+             "required": ["prompt", "output"]}},
+         "sampling": {"type": "object", "description": "e.g. {repetition_penalty: 1.1, temperature: 0.7}"},
+         "mode": {"type": "string", "enum": ["add", "mul"], "default": "add"},
+         "notes": {"type": "string"}, "source": {"type": "string"}},
+                     "required": ["name", "description", "neurons", "tags", "examples"]}},
+    {"name": "neuronary_update", "description": "Edit one of the person's own neuronary recipes: add examples (examples replaces the whole "
+     "list), change the neurons or doses (neurons replaces them all; update the examples to match). Only when the person asks.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"},
+                                                       "description": {"type": "string"},
+                                                       "neurons": {"type": "array", "description": "replaces the recipe's neurons and doses (same units as `steer`)",
+                                                                   "items": {"type": "object", "properties": {**LN, "dose": {"type": "number"}},
+                                                                             "required": ["layer", "n", "dose"]}},
+                                                       "tags": {"type": "array", "items": {"type": "string"}},
+                                                       "examples": {"type": "array", "items": {"type": "object"}},
+                                                       "sampling": {"type": "object"}, "notes": {"type": "string"}},
+                     "required": ["id"]}},
+    {"name": "neuronary_comment", "description": "Comment on a neuronary recipe as the person. Only when they ask.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "body": {"type": "string"},
+                                                       "parent_id": {"type": "integer"}}, "required": ["id", "body"]}},
+    {"name": "neuronary_reproduce", "description": "Report your run of someone else's neuronary recipe as the person: whether "
+     "it reproduced (yes / partial / no), the steered output verbatim from `steer`, the prompt, and the setup. Shown on the "
+     "recipe and counted; one report per recipe per person, sending again replaces it. Not for the person's own recipes "
+     "(add an example with neuronary_update instead). Only when the person asks or agrees.",
+     "inputSchema": {"type": "object", "properties": {
+         "id": {"type": "string"}, "output": {"type": "string", "description": "the steered output, verbatim"},
+         "prompt": {"type": "string"}, "result": {"type": "string", "enum": ["yes", "partial", "no"], "default": "yes"},
+         "setup": {"type": "string", "description": "default: bf16 transformers (neuron explorer), greedy"},
+         "note": {"type": "string", "description": "dose changes, caveats, what it took to reproduce"}},
+                     "required": ["id", "output"]}},
+    {"name": "neuronary_vote", "description": "Vote on a neuronary recipe as the person (1, -1, or 0 to clear). Only when "
+     "they ask.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"},
+                                                       "value": {"type": "integer", "enum": [-1, 0, 1]}},
+                     "required": ["id", "value"]}},
     {"name": "highlight_neurons", "description": "Mark a set of neurons on the 3D map (replaces the previous marks; an "
      "empty list clears them). sign '-' draws a neuron in the negative-pole colour.",
      "inputSchema": {"type": "object", "properties": {"neurons": {"type": "array", "items": {
@@ -203,7 +274,75 @@ def post(path, body, timeout=60):
         return json.load(r)
 
 
+def neuronary_token():
+    t = os.environ.get("NEURONARY_TOKEN", "").strip()
+    if not t:
+        try:
+            t = open(os.path.expanduser("~/.neuronary/token"), encoding="utf-8").read().strip()
+        except OSError:
+            t = ""
+    return t
+
+
+def neuronary(method, path, body=None, params=None):
+    q = {k: v for k, v in (params or {}).items() if v not in (None, "")}
+    url = NEURONARY + path + ("?" + urllib.parse.urlencode(q) if q else "")
+    req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode())
+    req.add_header("Content-Type", "application/json")
+    tok = neuronary_token()
+    if tok:
+        req.add_header("Authorization", f"Bearer {tok}")
+    elif method != "GET":
+        raise ValueError("no neuronary token: the person can create one at neuronary.org (account menu -> API & agents) "
+                         "and put it in NEURONARY_TOKEN or ~/.neuronary/token")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.load(e).get("error")
+        except Exception:
+            msg = str(e)
+        raise ValueError(f"neuronary {e.code}: {msg}") from None
+
+
+def to_explorer(ns):
+    return [{"layer": x["layer"], "n": x["neuron"], "dose": x["dose"]} for x in ns]
+
+
 def call(name, a):
+    if name == "neuronary_search":
+        r = neuronary("GET", "/recipes", params={"q": a.get("q"), "tag": a.get("tag"), "author": a.get("author"),
+                                                 "sort": a.get("sort"), "limit": a.get("limit", 20)})
+        for x in r["recipes"]:
+            x["steer_neurons"] = to_explorer(x.pop("neurons"))
+        return r
+    if name == "neuronary_get":
+        r = neuronary("GET", f"/recipes/{a['id']}")
+        r["steer_neurons"] = to_explorer(r.pop("neurons"))
+        return r
+    if name == "neuronary_publish":
+        body = {k: a[k] for k in ("name", "description", "tags", "examples", "sampling", "notes", "source") if a.get(k) is not None}
+        body["model"] = MODEL
+        body["neurons"] = [{"layer": int(x["layer"]), "neuron": int(x["n"]), "dose": float(x["dose"])} for x in a["neurons"]]
+        if a.get("mode") == "mul":
+            body["method"] = {"op": "mul"}
+        return neuronary("POST", "/recipes", body)
+    if name == "neuronary_update":
+        body = {k: v for k, v in a.items() if k not in ("id", "neurons")}
+        if a.get("neurons"):
+            body["neurons"] = [{"layer": int(x["layer"]), "neuron": int(x["n"]), "dose": float(x["dose"])} for x in a["neurons"]]
+        return neuronary("PATCH", f"/recipes/{a['id']}", body)
+    if name == "neuronary_comment":
+        return neuronary("POST", f"/recipes/{a['id']}/comments", {"body": a["body"], "parent_id": a.get("parent_id")})
+    if name == "neuronary_reproduce":
+        body = {"output": a["output"], "result": a.get("result", "yes"),
+                "setup": a.get("setup") or "bf16 transformers (neuron explorer), greedy"}
+        body.update({k: a[k] for k in ("prompt", "note") if a.get(k)})
+        return neuronary("POST", f"/recipes/{a['id']}/reproductions", body)
+    if name == "neuronary_vote":
+        return neuronary("POST", f"/recipes/{a['id']}/vote", {"value": a["value"]})
+
     if name == "overview":
         return get("/api/agent/overview")
     if name == "neuron":

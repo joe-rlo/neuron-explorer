@@ -1,6 +1,6 @@
 """Lab: the records and games built on experiment mode. The notebook's one-line view of each saved experiment (what
-was run, its result and the prediction made before it), blind rating's binomial test, challenge scoring and the
-labels for guess the neuron. Pure python; storage and the model are in server.py.
+was run, its result and the prediction made before it), blind rating's binomial test, challenge scoring, the
+labels for guess the neuron and the field guide card as Markdown. Pure python; storage and the model are in server.py.
 """
 import collections
 import math
@@ -180,3 +180,79 @@ def guess_score(history):
         streak = streak + 1 if h["correct"] else 0
         best_ = max(best_, streak)
     return {"played": len(history), "correct": sum(h["correct"] for h in history), "streak": streak, "best": best_}
+
+
+# ---------- field guide ----------
+CONFIDENCE = ("hunch", "supported", "replicated")
+
+
+def _n(v):
+    return "—" if v is None else f"{v:.2f}" if abs(v) < 10 else f"{v:.1f}"
+
+
+def window_lines(w, what="text"):
+    """A therapeutic window in words, one line per direction."""
+    out = []
+    for k, s in (("positive", "+"), ("negative", "−")):
+        r = w.get(k)
+        if not r:
+            continue
+        if r.get("ed") is None:
+            out.append(f"{s}: no dose up to {s}{r['max_dose']:g} had an effect")
+            continue
+        brk = f"{what} still {'coherent' if what == 'text' else 'valid'} at {s}{r['max_dose']:g}" if r.get("td") is None \
+            else f"{what} breaks at {s}{r['td']:g} (TD)"
+        out.append(f"{s}: moves from {s}{r['ed']:g} (ED) · {brk}" + (f" · index {_n(r['index'])}" if r.get("index") is not None else ""))
+    return out
+
+
+def card_markdown(c):
+    """A field guide card as Markdown."""
+    who = f"L{c['layer']} N{c['n']}"
+    md = [f"# {c.get('name') or who}", "", f"**{who}** · confidence: {c.get('confidence') or 'hunch'}", ""]
+    md += ["## Hypothesis", "", c.get("hypothesis") or "_none written yet_", ""]
+    sw = c.get("sweep")
+    if sw:
+        md += ["## Dose-response", "", f"Dose sweep on “{sw['prompt']}”, measure: {sw['measure']['name']}, "
+               f"{sw['n']} replies per dose ({sw['id']}).", "", "| dose | mean | 95% CI | coherence |", "|---:|---:|---|---:|"]
+        for p in sorted(sw["points"], key=lambda p: p["dose"]):
+            ci = p["measure"].get("ci")
+            d = f"{p['dose']:+g}" if p["dose"] else "0"
+            md.append(f"| {d} | {_n(p['measure']['mean'])} | {f'{_n(ci[0])} to {_n(ci[1])}' if ci else ''} | "
+                      f"{_n(p['coherence']['mean'])} |")
+        md.append("")
+    if c.get("windows"):
+        md += ["## Therapeutic window", ""]
+        for k, v in c["windows"].items():
+            task = k.startswith("task: ")
+            md.append(f"**{k[6:] if task else k}** (from {'the ' + v['prompt'] + ' task' if task else '“' + v['prompt'] + '”'})")
+            md += [f"- {line}" for line in window_lines(v["window"], "answers" if task else "text")] + [""]
+    rs = c.get("results") or {}
+    if rs:
+        md += ["## Steering and lesion", ""]
+        for m, r in rs.items():
+            for k, title in (("steer", "steering (sufficiency)"), ("ablate", "ablation (necessity)")):
+                if r.get(k):
+                    md.append(f"- {m}, {title}: {r[k]['sentence']}")
+        md.append("")
+    t = c.get("tuning")
+    if t:
+        top = sorted(t["items"], key=lambda i: -i["r"])[:3]
+        md += [f"## Tuning curve ({t['set']})", "", f"Item selectivity {_n(t['si'])}; "
+               + "; ".join(f"d' {k} {_n(v)}" for k, v in t["d"].items()) + ". Strongest: "
+               + ", ".join(f"{i['text']} {_n(i['r'])}" for i in top) + ".", ""]
+    b = c.get("blind")
+    if b and b.get("n"):
+        md += ["## Blind rating", "", b["sentence"], ""]
+        md += [f"- “{k}”: {v['sentence']}" for k, v in b["by_property"].items()] + [""]
+    ev = c.get("notes", []) + c.get("evidence", [])
+    if ev:
+        md += ["## Evidence log", ""]
+        for e in sorted(ev, key=lambda e: e.get("timestamp") or e.get("time") or "", reverse=True):
+            if "text" in e:
+                md.append(f"- {(e.get('time') or '')[:16].replace('T', ' ')} · note: {e['text']}")
+            else:
+                pred = f" Prediction: “{e['prediction']}”" + (f" ({e['verdict']})." if e.get("verdict") else ".") if e.get("prediction") else ""
+                md.append(f"- {(e.get('timestamp') or '')[:16].replace('T', ' ')} · {e['what']}: {e['result'] or 'no result line'}{pred}")
+        md.append("")
+    return "\n".join(md)

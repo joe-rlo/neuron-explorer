@@ -1178,6 +1178,93 @@ async def guess_answer(req: Request):
             "truth": {k: r[k] for k in ("layer", "n", "label", "source")}, "score": lab.guess_score(games["guess"])}
 
 
+# ---------- field guide: a card per named neuron, built from everything run on it, plus your hypothesis and notes ----------
+GUIDE = os.path.join(EXPERIMENTS, "field_guide")
+
+
+def _guide_path(layer, n):
+    return os.path.join(GUIDE, f"L{layer}_N{n}.json")
+
+
+def _guide_file(layer, n):
+    return _read_json(_guide_path(layer, n), {"layer": layer, "n": n, "hypothesis": "", "confidence": "hunch", "notes": []})
+
+
+def _neuron_index(layer, n):
+    vals = [v.get("index") for v in _read_json(WINDOWS, {}).get(f"L{layer}/N{n}", {}).values()]
+    vals = [v for v in vals if v is not None]
+    return max(vals) if vals else None
+
+
+@app.get("/api/guide")
+def guide():
+    """The gallery: every named neuron, and every neuron with a card file, with its sortable fields."""
+    nm = names()
+    keys = {(int(k.split("/")[0][1:]), int(k.split("/N")[1])) for k in nm}
+    for f in glob.glob(os.path.join(GUIDE, "L*_N*.json")):
+        l, n = os.path.basename(f)[1:-5].split("_N")
+        keys.add((int(l), int(n)))
+    es = _notebook_entries()
+    out = []
+    for l, n in sorted(keys):
+        g = _guide_file(l, n)
+        out.append({"layer": l, "n": n, "name": nm.get(f"L{l}/N{n}", ""), "hypothesis": g["hypothesis"],
+                    "confidence": g["confidence"], "index": _neuron_index(l, n),
+                    "experiments": sum(any(x["layer"] == l and x["n"] == n for x in e["neurons"]) for e in es)})
+    return {"cards": out, "confidence": lab.CONFIDENCE}
+
+
+def _card(layer, n):
+    g = _guide_file(layer, n)
+    card = {**g, "name": names().get(f"L{layer}/N{n}", ""), "windows": _read_json(WINDOWS, {}).get(f"L{layer}/N{n}", {}),
+            "results": _read_json(RESULTS, {}).get(f"L{layer}/N{n}", {}), "blind": lab.blind_summary(_blind_trials(layer, n)),
+            "evidence": notebook(layer, n)["entries"], "sweep": None, "tuning": None}
+    for e in card["evidence"]:  # the newest finished dose sweep
+        if e["kind"] == "sweep" and e["result"] and not e["result"].startswith("cancelled"):
+            rec = _read_json(os.path.join(EXPERIMENTS, e["id"] + ".json"), None)
+            if rec and rec.get("summary"):
+                card["sweep"] = {"id": rec["id"], "prompt": rec["prompt"], "measure": rec["measures"][0], "n": rec["n"],
+                                 "doses": rec["doses"], "points": rec["summary"], "window": rec.get("window")}
+                break
+    for st in _stimulus_sets():  # the first stimulus set that has been run
+        r = tuning_neuron(layer, n, st["name"])
+        if r.get("ready"):
+            card["tuning"] = {**r, "set": st["name"]}
+            break
+    return card
+
+
+@app.get("/api/guide/card")
+def guide_card(layer: int, n: int):
+    return _card(layer, n)
+
+
+@app.get("/api/guide/card.md")
+def guide_card_md(layer: int, n: int):
+    return PlainTextResponse(lab.card_markdown(_card(layer, n)), media_type="text/markdown; charset=utf-8")
+
+
+@app.post("/api/guide/card")
+async def guide_card_save(req: Request):
+    """Updates a card's hypothesis and confidence, adds a note ({note: text}) or removes one ({remove_note: index})."""
+    import datetime
+    b = await req.json()
+    layer, n = int(b["layer"]), int(b["n"])
+    g = _guide_file(layer, n)
+    if "hypothesis" in b:
+        g["hypothesis"] = str(b["hypothesis"]).strip()
+    if "confidence" in b:
+        if b["confidence"] not in lab.CONFIDENCE:
+            return JSONResponse({"error": f"confidence must be one of {', '.join(lab.CONFIDENCE)}"}, status_code=400)
+        g["confidence"] = b["confidence"]
+    if str(b.get("note") or "").strip():
+        g["notes"].append({"time": datetime.datetime.now().isoformat(timespec="seconds"), "text": b["note"].strip()})
+    if "remove_note" in b and 0 <= int(b["remove_note"]) < len(g["notes"]):
+        g["notes"].pop(int(b["remove_note"]))
+    _write_json(_guide_path(layer, n), g)
+    return _card(layer, n)
+
+
 @app.post("/api/experiment/verdict")
 async def experiment_verdict(req: Request):
     """Marks an experiment's prediction confirmed, disconfirmed or inconclusive (null clears it). The prediction

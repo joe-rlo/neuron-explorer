@@ -107,3 +107,33 @@ def test_guess_options_distinct_and_contains_truth():
 def test_guess_score_streaks():
     h = [{"correct": c} for c in (True, True, False, True, True, True, False, True)]
     assert lab.guess_score(h) == {"played": 8, "correct": 6, "streak": 1, "best": 3}
+
+
+# ---------- field guide ----------
+def test_window_lines_in_words():
+    w = {"positive": {"ed": 0.25, "td": 1.0, "max_dose": 1.0, "index": 4.0}, "negative": {"ed": None, "td": None, "max_dose": 1.0}}
+    assert lab.window_lines(w) == ["+: moves from +0.25 (ED) · text breaks at +1 (TD) · index 4.00", "−: no dose up to −1 had an effect"]
+    assert lab.window_lines({"positive": {"ed": 0.5, "td": None, "max_dose": 1.0}}, "answers") == ["+: moves from +0.5 (ED) · answers still valid at +1"]
+
+
+def test_card_markdown_has_every_section():
+    pt = lambda d, m: {"dose": d, "measure": {"mean": m, "ci": [m - 1, m + 1]}, "coherence": {"mean": -0.5}}
+    card = {"layer": 22, "n": 2742, "name": "alien", "hypothesis": "Pushes text toward aliens.", "confidence": "supported",
+            "sweep": {"id": "e1", "prompt": "Who are you?", "measure": {"name": "lens words"}, "n": 8, "points": [pt(0, 0), pt(1, 12), pt(-1, 0)]},
+            "windows": {"lens words": {"window": {"positive": {"ed": 0.25, "td": 1.0, "max_dose": 1.0, "index": 4.0}}, "prompt": "Who are you?"},
+                        "task: risk · CE": {"window": {"negative": {"ed": 1.0, "td": None, "max_dose": 1.0}}, "prompt": "risk"}},
+            "results": {"lens words": {"steer": {"sentence": "+0.8 raised it."}, "ablate": {"sentence": "Ablating changed nothing."}}},
+            "tuning": {"set": "food", "si": 0.4, "d": {"food": 1.2}, "items": [{"text": "pizza", "r": 0.9}, {"text": "car", "r": 0.1}]},
+            "blind": {"n": 3, "sentence": "2 of 3.", "by_property": {"aliens": {"sentence": "2 of 3."}}},
+            "notes": [{"time": "2026-10-28T10:00:00", "text": "Replicated on a second prompt."}],
+            "evidence": [{"timestamp": "2026-10-27T09:00:00", "what": "dose sweep", "result": "+1 raised it.", "prediction": "it rises", "verdict": "confirmed"}]}
+    md = lab.card_markdown(card)
+    for want in ("# alien", "confidence: supported", "Pushes text toward aliens.", "| +1 | 12.0 | 11.0 to 13.0 | -0.50 |", "| 0 | 0.00 |",
+                 "**lens words** (from “Who are you?”)", "**risk · CE** (from the risk task)", "answers still valid at −1",
+                 "ablation (necessity): Ablating changed nothing.", "Strongest: pizza 0.90, car 0.10", "- “aliens”: 2 of 3.",
+                 "Prediction: “it rises” (confirmed)."):
+        assert want in md, want
+    assert md.index("| -1 |") < md.index("| 0 |") < md.index("| +1 |")
+    log = md.split("## Evidence log")[1]
+    assert log.index("Replicated") < log.index("dose sweep")  # newest first
+    assert "_none written yet_" in lab.card_markdown({"layer": 1, "n": 2})

@@ -715,6 +715,7 @@ function renderDetails(u) {
     h += `<table class="dtable"><tr><th class="num">dose</th><th class="num">push</th><th class="num">distinct-4</th><th class="num">capped</th><th class="num">logprob</th></tr>` +
       Object.entries(s.dose).map(([d, v]) => `<tr><td class="num">${d}</td><td class="num">${v.rel_push.toFixed(2)}</td><td class="num">${v.distinct4.toFixed(2)}</td><td class="num">${(v.capped * 100).toFixed(0)}%</td><td class="num">${v.logprob.toFixed(2)}</td></tr>`).join("") + `</table>`;
   }
+  if (u.kind === "neuron") h += `<div class="fg-link"><button type="button" id="d-guide" class="dim" title="this neuron's field guide card: your hypothesis and notes with everything run on it">field guide card ›</button></div>`;
   h += `<div id="d-window"></div><div id="d-results"></div><div id="d-lens" class="slot">—</div><div class="lab" style="margin-top:18px">connections</div><div id="d-con" class="slot">—</div>`;
   $("#tab-details").innerHTML = h;
   renderWindow();
@@ -789,6 +790,7 @@ function goToNeuron(layer, n, kind = "neuron") {
   if (kind === "neuron") map.focusNeuron(layer, n);
 }
 $("#tab-details").addEventListener("click", e => {
+  if (e.target.id === "d-guide" && state.focus) { FG.open = { layer: state.focus.layer, n: state.focus.n }; showLab("guide"); return; }
   const th = e.target.closest("tr[data-hl]"); if (th) return openHead(+th.dataset.hl, +th.dataset.hh);
   const tr = e.target.closest("tr[data-l]"); if (tr) goToNeuron(+tr.dataset.l, +tr.dataset.n);
 });
@@ -1360,10 +1362,14 @@ const LAB = { view: "notebook", only: false, notebook: null };
 $("#lab-btn").onclick = () => { focusEl.classList.add("on"); syncTabs(); setTab("lab"); setFocusCollapsed(false); };
 $("#lab-nav").onclick = e => {
   const b = e.target.closest("button"); if (!b) return;
-  LAB.view = b.dataset.l; document.querySelectorAll("#lab-nav button").forEach(x => x.classList.toggle("on", x === b)); renderLab();
+  showLab(b.dataset.l);
 };
+function showLab(view) {
+  LAB.view = view; document.querySelectorAll("#lab-nav button").forEach(x => x.classList.toggle("on", x.dataset.l === view));
+  if (curTab() === "lab") renderLab(); else { focusEl.classList.add("on"); syncTabs(); setTab("lab"); setFocusCollapsed(false); }
+}
 function renderLab() {
-  ({ notebook: renderNotebook, challenges: renderChallenges, guess: renderGuess })[LAB.view]?.();
+  ({ notebook: renderNotebook, guide: renderGuide, challenges: renderChallenges, guess: renderGuess })[LAB.view]?.();
 }
 const when = ts => { const d = new Date(ts); return isNaN(d) ? "" : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toTimeString().slice(0, 5)}`; };
 const neuronChip = x => `<span class="chip nchip" data-l="${x.layer}" data-n="${x.n}" title="open this neuron">L${x.layer} N${x.n}</span>`;
@@ -1390,6 +1396,12 @@ $("#lab-body").addEventListener("click", e => {
   if (e.target.id === "nb-only") { LAB.only = e.target.checked; renderNotebook(); return; }
   const ca = e.target.closest(".ch-go"); if (ca) { runChallenge(ca.closest(".ch").dataset.id); return; }
   if (e.target.id === "g-new") { newGuess(); return; }
+  const fc = e.target.closest(".fg-card"); if (fc) { FG.open = { layer: +fc.dataset.l, n: +fc.dataset.n }; renderGuide(); return; }
+  if (e.target.id === "fg-back") { FG.open = null; renderGuide(); return; }
+  if (e.target.id === "fg-md") { cardMarkdown(); return; }
+  if (e.target.id === "fg-png") { cardPNG(); return; }
+  if (e.target.id === "fg-add") { saveCard({ note: $("#fg-note").value }); return; }
+  const rn = e.target.closest(".fg-rm"); if (rn) { saveCard({ remove_note: +rn.dataset.k }); return; }
   const go = e.target.closest(".g-opt"); if (go) { answerGuess(+go.dataset.k); return; }
   if (e.target.closest(".ch-cancel") && CH.run?.job) { api("/api/experiment/cancel", { id: CH.run.job }).catch(() => {}); return; }
   const c = e.target.closest(".nchip"); if (c) { goToNeuron(+c.dataset.l, +c.dataset.n); return; }
@@ -1436,6 +1448,12 @@ async function renderChallenges(reload = true) {
     }).join("");
 }
 $("#lab-body").addEventListener("input", e => { if (e.target.classList.contains("ch-dose")) CH.dose[e.target.closest(".ch").dataset.id] = e.target.value; });
+$("#lab-body").addEventListener("change", e => {
+  if (e.target.id === "fg-sort") { FG.sort = e.target.value; renderGuide(); }
+  if (e.target.id === "fg-conf") saveCard({ confidence: e.target.value });
+  if (e.target.id === "fg-hyp") saveCard({ hypothesis: e.target.value }, false);
+});
+$("#lab-body").addEventListener("keydown", e => { if (e.target.id === "fg-note" && e.key === "Enter") { e.preventDefault(); saveCard({ note: e.target.value }); } });
 async function runChallenge(id) {
   const neurons = attemptNeurons(), dose = parseFloat(String(CH.dose[id] ?? "0.5").replace("−", "-"));
   if (!neurons.length || X.job) return;
@@ -1507,6 +1525,131 @@ async function answerGuess(k) {
   renderGuess();
 }
 
+// ---- field guide: a card per named neuron with your hypothesis, confidence and notes, and everything run on it ----
+const FG = { sort: "layer", open: null, card: null };
+const CONF = ["hunch", "supported", "replicated"];
+async function renderGuide() {
+  if (FG.open) return renderCard();
+  const el = $("#lab-body");
+  let r;
+  try { r = await api("/api/guide"); } catch (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; }
+  if (curTab() !== "lab" || LAB.view !== "guide" || FG.open) return;
+  const by = { layer: (a, b) => a.layer - b.layer || a.n - b.n, confidence: (a, b) => CONF.indexOf(b.confidence) - CONF.indexOf(a.confidence) || a.layer - b.layer,
+               index: (a, b) => (b.index ?? -1) - (a.index ?? -1) || a.layer - b.layer };
+  const cards = r.cards.sort(by[FG.sort]);
+  el.innerHTML = `<div class="nb-head"><span class="dim">${cards.length} card${cards.length === 1 ? "" : "s"}</span>
+      <label class="xf">sort<select id="fg-sort">${["layer", "confidence", "index"].map(k => `<option value="${k}"${k === FG.sort ? " selected" : ""}>${k === "index" ? "therapeutic index" : k}</option>`).join("")}</select></label></div>`
+    + (cards.length ? `<div class="fg-grid">${cards.map(c => `<button type="button" class="fg-card" data-l="${c.layer}" data-n="${c.n}">
+        <span class="fg-name">${esc(c.name || "unnamed")}</span><span class="mono dim">L${c.layer} N${c.n} · <span class="conf-${c.confidence}">${c.confidence}</span></span>
+        <span class="fg-hyp">${c.hypothesis ? esc(c.hypothesis) : `<span class="dim">no hypothesis yet</span>`}</span>
+        <span class="mono dim">${c.index != null ? `index ${num(c.index)} · ` : ""}${c.experiments} experiment${c.experiments === 1 ? "" : "s"}</span></button>`).join("")}</div>`
+      : `<div class="xnote dim">No cards yet. Naming a neuron (the name field at the top of its panel) gives it a card; so does its Details tab › field guide card.</div>`);
+}
+async function renderCard() {
+  const el = $("#lab-body"), o = FG.open;
+  if (!FG.card || FG.card.layer !== o.layer || FG.card.n !== o.n) el.innerHTML = `<div class="xnote dim">loading…</div>`;
+  try { FG.card = await api(`/api/guide/card?layer=${o.layer}&n=${o.n}`); } catch (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; }
+  if (curTab() === "lab" && LAB.view === "guide" && FG.open === o) drawCard();
+}
+function drawCard() {
+  const c = FG.card, el = $("#lab-body"), sec = (t, body) => `<div class="fg-sec"><div class="lab">${t}</div>${body}</div>`;
+  const sw = c.sweep, plot = sw ? sweepPlot({ doses: [...sw.doses].sort((a, b) => a - b), points: Object.fromEntries(sw.points.map(p => [p.dose, p])), measure: sw.measure })
+    + `<div class="xnote dim">from the newest dose sweep: “${esc(sw.prompt)}”, ${sw.n} replies per dose</div>` : `<div class="xnote dim">No dose sweep yet: run one from the Chat tab.</div>`;
+  const wins = Object.entries(c.windows).map(([k, v]) => k.startsWith("task: ")
+    ? windowHTML(v.window, k.split(" · ").slice(1).join(" · "), k.slice(6), "answers") + `<div class="xnote dim">from the ${esc(v.prompt)} task</div>`
+    : windowHTML(v.window, k) + `<div class="xnote dim">from a dose sweep on “${esc(v.prompt)}”</div>`).join("");
+  const res = Object.entries(c.results).map(([m, r]) => `<div class="lcard">${[["steer", "steering · sufficient?"], ["ablate", "ablation · necessary?"]].map(([k, t]) =>
+    `<div class="lcell"><div class="lab">${t} · ${esc(m)}</div>${r[k] ? `<div class="xline">${esc(r[k].sentence)}</div>` : `<div class="xnote dim">not run</div>`}</div>`).join("")}</div>`).join("");
+  const tu = c.tuning ? (() => { const { svg, legend } = tuneSVG(c.tuning); return svg + legend + `<div class="xnote">item selectivity ${num(c.tuning.si)} · ${Object.entries(c.tuning.d).map(([k, v]) => `d' ${esc(k)} ${num(v)}`).join(" · ")}</div>`; })() : "";
+  const ev = [...c.notes.map((x, k) => ({ ...x, k, t: x.time })), ...c.evidence.map(x => ({ ...x, t: x.timestamp }))].sort((a, b) => (b.t || "").localeCompare(a.t || ""));
+  const KEEP = 12;  // the PNG keeps the newest entries; the page shows them all
+  const log = ev.map((x, k) => (k < KEEP ? x : { ...x, older: true })).map(x => x.text != null
+    ? `<div class="fg-ev${x.older ? " noprint" : ""}"><span class="mono dim">${esc(when(x.t))} · note</span> ${esc(x.text)} <button type="button" class="fg-rm dim noprint" data-k="${x.k}" aria-label="remove note">×</button></div>`
+    : `<div class="fg-ev${x.older ? " noprint" : ""}"><span class="mono dim">${esc(when(x.t))} · ${esc(x.kind)}</span> ${esc(x.what)}${x.result ? `<div class="xline">${esc(x.result)}</div>` : ""}${x.prediction ? `<div class="xnote">prediction “${esc(x.prediction)}”${x.verdict ? ` · <span class="conf-${x.verdict}">${x.verdict}</span>` : ""}</div>` : ""}</div>`).join("");
+  el.innerHTML = `<div class="fg-top noprint"><button type="button" id="fg-back" class="dim">‹ all cards</button><span class="xgap"></span><button type="button" id="fg-md" class="xbtn" title="download this card as Markdown">Markdown</button><button type="button" id="fg-png" class="xbtn" title="download this card as an image">PNG</button></div>
+    <div id="fg-sheet">
+      <div class="fg-title">${esc(c.name || `L${c.layer} N${c.n}`)}</div>
+      <div class="nb-meta">${neuronChip(c)}<label class="xf">confidence<select id="fg-conf">${CONF.map(k => `<option${k === c.confidence ? " selected" : ""}>${k}</option>`).join("")}</select></label>${c.name ? "" : `<span class="dim noprint">name it in the neuron panel</span>`}</div>
+      ${sec("hypothesis", `<textarea id="fg-hyp" rows="3" placeholder="what you think this neuron does, and what would show you wrong" spellcheck="false">${esc(c.hypothesis)}</textarea>`)}
+      ${sec("dose-response", plot)}
+      ${wins ? sec("therapeutic window", wins) : ""}
+      ${res ? sec("steering vs ablation", res) : ""}
+      ${tu ? sec(`tuning curve · ${esc(c.tuning.set)}`, tu) : ""}
+      ${c.blind.n ? sec("blind rating", `<div class="xline">${esc(c.blind.sentence)}</div>`) : ""}
+      ${sec("evidence log", `<div class="fg-add noprint"><input id="fg-note" placeholder="add a note: an observation, a replication, a doubt" spellcheck="false"><button type="button" id="fg-add" class="xbtn">add</button></div>${log}${ev.length > KEEP ? `<div class="xnote dim printonly">+ ${ev.length - KEEP} older entries in the notebook</div>` : ""}${log ? "" : `<div class="xnote dim">Nothing yet: experiments on this neuron and your notes land here.</div>`}`)}
+    </div>`;
+}
+async function saveCard(change, redraw = true) {
+  const o = FG.open; if (!o) return;
+  try { const c = await api("/api/guide/card", { layer: o.layer, n: o.n, ...change }); if (FG.open === o) { FG.card = c; if (redraw) drawCard(); } }
+  catch (err) { $("#status").textContent = err.message; }
+}
+const cardFile = ext => `L${FG.card.layer}_N${FG.card.n}${FG.card.name ? "_" + FG.card.name.replace(/[^\w-]+/g, "_").slice(0, 40) : ""}.${ext}`;
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function cardMarkdown() {
+  const r = await fetch(`/api/guide/card.md?layer=${FG.card.layer}&n=${FG.card.n}`);
+  download(new Blob([await r.text()], { type: "text/markdown" }), cardFile("md"));
+}
+// the card as a PNG: its text and plots drawn in reading order onto a canvas, plots as standalone SVG images with
+// their computed styles inlined (the page's stylesheet doesn't reach an SVG drawn as an image)
+async function cardPNG() {
+  const sheet = $("#fg-sheet"), W = 720, PAD = 28, S = 2, ops = [];
+  const scratch = document.createElement("canvas").getContext("2d");
+  const fontOf = cs => `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const wrap = (text, font, width) => {
+    scratch.font = font; const lines = [];
+    for (const para of text.split("\n")) {
+      let line = "";
+      for (const w of para.split(/(\s+)/)) {
+        if (line && scratch.measureText(line + w).width > width) { lines.push(line.trimEnd()); line = w.trimStart(); } else line += w;
+      }
+      lines.push(line);
+    }
+    return lines;
+  };
+  const svgImage = async svg => {
+    const clone = svg.cloneNode(true), src = [svg, ...svg.querySelectorAll("*")], dst = [clone, ...clone.querySelectorAll("*")];
+    src.forEach((n, k) => { const cs = getComputedStyle(n);
+      dst[k].setAttribute("style", ["fill", "stroke", "stroke-width", "stroke-dasharray", "opacity", "font-size", "font-family", "font-weight"].map(p => `${p}:${cs.getPropertyValue(p)}`).join(";")); });
+    const vb = svg.viewBox.baseVal;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg"); clone.setAttribute("width", vb.width); clone.setAttribute("height", vb.height);
+    const img = new Image();
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+    await img.decode();
+    return { img, h: (W - 2 * PAD) * vb.height / vb.width };
+  };
+  const walk = async node => {
+    if (node.nodeType !== 1 || node.classList.contains("noprint") || node.closest(".noprint")) return;
+    if (node.tagName.toLowerCase() === "svg") { ops.push({ svg: await svgImage(node) }); return; }
+    if (node.querySelector("svg") || (node.children.length && [...node.children].some(c => c.matches(".fg-sec, .lab, .xwin, .lcard, .lcell, .fg-ev, .xnote, .xline, .tlegend, .nb-meta")))) {
+      for (const c of node.children) await walk(c);
+      return;
+    }
+    const cs = getComputedStyle(node);
+    const textOf = n => n.nodeType === 3 ? n.textContent : n.nodeType !== 1 || n.classList.contains("noprint") ? ""
+      : n.tagName === "TEXTAREA" || n.tagName === "SELECT" ? ` ${n.value} ` : [...n.childNodes].map(textOf).join("") + (n.tagName === "SPAN" ? " " : "");
+    const text = textOf(node).replace(/\s+/g, " ").trim();
+    if (!text) return;
+    const size = parseFloat(cs.fontSize), font = fontOf(cs);
+    ops.push({ lines: wrap(text, font, W - 2 * PAD), font, color: cs.color, lh: size * 1.45, top: node.matches(".lab") ? 14 : 4 });
+  };
+  for (const c of sheet.children) await walk(c);
+  const H = PAD * 2 + ops.reduce((h, o) => h + (o.svg ? o.svg.h + 8 : o.top + o.lines.length * o.lh), 0);
+  const cv = document.createElement("canvas"); cv.width = W * S; cv.height = Math.ceil(H * S);
+  const g = cv.getContext("2d"); g.scale(S, S);
+  g.fillStyle = "#0d0f11"; g.fillRect(0, 0, W, H); g.textBaseline = "top";
+  let y = PAD;
+  for (const o of ops) {
+    if (o.svg) { g.drawImage(o.svg.img, PAD, y, W - 2 * PAD, o.svg.h); y += o.svg.h + 8; continue; }
+    y += o.top; g.font = o.font; g.fillStyle = o.color;
+    for (const line of o.lines) { g.fillText(line, PAD, y + (o.lh - parseFloat(o.font.split(" ")[2])) / 2); y += o.lh; }
+  }
+  cv.toBlob(b => download(b, cardFile("png")), "image/png");
+}
+
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
 const T = { sets: [], scores: {}, pending: new Set(), running: false };
 const tuneSet = () => T.sets.find(s => s.name === $("#t-set").value) || T.sets[0] || null;
@@ -1549,20 +1692,26 @@ async function renderTuning() {
   }
   const r = await api(`/api/tuning/neuron?layer=${f.layer}&n=${f.n}&set=${encodeURIComponent(st.name)}`).catch(() => null);
   if (!r?.ready || !isFocus(f.layer, f.n, "neuron") || tuneSet() !== st) return;
+  const { cats, svg, legend } = tuneSVG(r);
+  const cat = cats.includes(tuneCat()) ? tuneCat() : cats[0], d = r.d[cat];
+  el.innerHTML = `${svg}
+    <div class="xnote dim">bar: the neuron's strongest |activation ÷ typical extreme| on the item's own tokens${st.template ? ` in “${esc(st.template)}”` : ""}</div>
+    ${legend}
+    <div class="xs tstats"><div title="(r_max − r_others) ÷ (r_max + r_others), r_others the mean of every other item"><span class="k">item selectivity</span><span>${num(r.si)}<span class="ci">0 responds evenly to every item, 1 to one item only${r.si > 0.5 ? ` (here: ${esc(r.items.reduce((a, b) => b.r > a.r ? b : a).text)})` : ""}</span></span></div>
+      <div title="(mean on ${esc(cat)} − mean on the rest) ÷ pooled SD"><span class="k">d' ${esc(cat)}</span><span>${num(d)}<span class="ci">how far above the other items ${esc(cat)} items sit, in SDs (0.8 is large)</span></span></div></div>
+    <div class="xline">${esc(tuneReading(r.si, d, cat))}</div>`;
+}
+// a tuning curve's bars, one per item, grouped and colored by category, and the category legend
+function tuneSVG(r) {
   const cats = [...new Set(r.items.map(i => i.category))], col = c => CAT_COLORS[cats.indexOf(c) % CAT_COLORS.length];
   const items = cats.flatMap(c => r.items.filter(i => i.category === c));  // grouped by category
   const W = 560, H = 190, L = 34, B = 54, bw = (W - L - 8) / items.length, top = Math.max(1e-6, ...items.map(i => i.r));
   const Y = v => 10 + (H - B - 10) * (1 - v / top);
   const bars = items.map((it, k) => `<rect x="${L + k * bw + 2}" y="${Y(it.r)}" width="${bw - 4}" height="${H - B - Y(it.r)}" fill="${col(it.category)}"><title>${esc(it.text)}: ${num(it.r)}</title></rect>
     <text class="tk" transform="translate(${L + k * bw + bw / 2 + 3},${H - B + 8}) rotate(50)">${esc(it.text)}</text>`).join("");
-  const cat = cats.includes(tuneCat()) ? tuneCat() : cats[0], d = r.d[cat];
-  el.innerHTML = `<svg class="xplot" viewBox="0 0 ${W} ${H}" role="img" aria-label="tuning curve">
-      <line class="ax" x1="${L}" x2="${W - 4}" y1="${H - B}" y2="${H - B}"/><text class="tk" x="${L - 6}" y="${Y(top) + 4}" text-anchor="end">${num(top)}</text><text class="tk" x="${L - 6}" y="${H - B + 4}" text-anchor="end">0</text>${bars}</svg>
-    <div class="xnote dim">bar: the neuron's strongest |activation ÷ typical extreme| on the item's own tokens${st.template ? ` in “${esc(st.template)}”` : ""}</div>
-    <div class="tlegend">${cats.map(c => `<span><i style="background:${col(c)}"></i>${esc(c)}</span>`).join("")}</div>
-    <div class="xs tstats"><div title="(r_max − r_others) ÷ (r_max + r_others), r_others the mean of every other item"><span class="k">item selectivity</span><span>${num(r.si)}<span class="ci">0 responds evenly to every item, 1 to one item only${r.si > 0.5 ? ` (here: ${esc(r.items.reduce((a, b) => b.r > a.r ? b : a).text)})` : ""}</span></span></div>
-      <div title="(mean on ${esc(cat)} − mean on the rest) ÷ pooled SD"><span class="k">d' ${esc(cat)}</span><span>${num(d)}<span class="ci">how far above the other items ${esc(cat)} items sit, in SDs (0.8 is large)</span></span></div></div>
-    <div class="xline">${esc(tuneReading(r.si, d, cat))}</div>`;
+  return { cats, svg: `<svg class="xplot" viewBox="0 0 ${W} ${H}" role="img" aria-label="tuning curve">
+      <line class="ax" x1="${L}" x2="${W - 4}" y1="${H - B}" y2="${H - B}"/><text class="tk" x="${L - 6}" y="${Y(top) + 4}" text-anchor="end">${num(top)}</text><text class="tk" x="${L - 6}" y="${H - B + 4}" text-anchor="end">0</text>${bars}</svg>`,
+    legend: `<div class="tlegend">${cats.map(c => `<span><i style="background:${col(c)}"></i>${esc(c)}</span>`).join("")}</div>` };
 }
 function tuneReading(si, d, cat) {
   if (d > 0.8 && si > 0.5) return `Responds to ${cat} and to one item well above the rest: item-selective as well as category-selective.`;

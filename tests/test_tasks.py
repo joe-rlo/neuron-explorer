@@ -177,3 +177,16 @@ def test_shipped_tasks_load_and_fill():
         for it in tk.expand(t):
             for s in tk.prompts(t, it):
                 assert "{" not in s and "}" not in s
+
+
+def test_framing_difference_and_whole_scenario_resampling():
+    t = tk.get("framing")
+    items = tk.expand(t)
+    assert len(items) == 10 and {it["frame"] for it in items} == {"gain", "loss"}
+    gain, loss = tk.prompts(t, items[0])[0], tk.prompts(t, items[1])[0]
+    assert "200 of the 600 homes are saved" in gain and "400 of the 600 homes burn down" in loss
+    # the gamble rate is 0.2 under gain wording and 0.6 under loss wording in every scenario, plus a scenario offset
+    p = [0.2 + 0.1 * (k // 2) + (0.4 if it["frame"] == "loss" else 0) for k, it in enumerate(items)]
+    f, boots = tk.bootstrap(t, items, p, B=200, seed=0)
+    assert f["value"] == pytest.approx(0.4)
+    assert np.allclose(boots["value"], 0.4)  # whole scenarios resample, so the offsets never leak into the difference

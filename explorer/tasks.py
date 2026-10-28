@@ -3,9 +3,11 @@ scored from the next token's probabilities (or sampled and parsed when an answer
 one behavioral parameter per dose. Pure numpy; the model side is in runtime.py, the job in server.py.
 
 A task file holds: name, kind ("choice" or "likert"), template, grid, fit, parameter and method (the note shown in the
-UI). The grid is a product over its keys; an entry that is an object merges all its fields into the item, a plain value
-is stored under the key. Template and option strings are filled from the item twice, so a grid entry can itself hold
-{fields}.
+UI), plus optional rate (the name of the mean item value, read instead of the parameter when its fit fails),
+percent (the parameter is a difference of rates: report it in percentage points) and unit (a field whose items
+resample together). The grid is a product over its keys; an entry that is an object merges all its fields into the
+item, a plain value is stored under the key. Template and option strings are filled from the item twice, so a grid
+entry can itself hold {fields}.
 
 choice: two options, x and y, shown as A and B in both orders. An item's value is P(y), averaged over the orders.
 likert: a rating from scale[0] to scale[1], asked with the anchors in both directions. An item's value is the expected
@@ -179,12 +181,19 @@ def fit_loss(c, p, spec):
     return {"value": 10 ** ll, "beta": beta, "at_bound": edge}
 
 
+def fit_difference(c, p, spec):
+    """No model: the mean item value where field == a minus where field == b (e.g. the gamble rate in the loss frame
+    minus the gain frame)."""
+    f = c[spec["field"]]
+    return {"value": float(p[f == spec["a"]].mean() - p[f == spec["b"]].mean())}
+
+
 def fit_mean(c, p, spec):
     """No model: the mean item value (a choice rate, or a mean rating)."""
     return {"value": float(p.mean())}
 
 
-FITS = {"hyperbolic": fit_hyperbolic, "risk": fit_risk, "loss": fit_loss, "mean": fit_mean}
+FITS = {"hyperbolic": fit_hyperbolic, "risk": fit_risk, "loss": fit_loss, "difference": fit_difference, "mean": fit_mean}
 
 
 def fit(task, c, p):

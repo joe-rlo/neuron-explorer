@@ -1,0 +1,32 @@
+{
+  "name": "framing",
+  "kind": "choice",
+  "parameter": "framing effect (loss − gain)",
+  "rate": "share choosing the gamble",
+  "percent": true,
+  "unit": "scenario",
+  "template": "{context}\nA: {A}\nB: {B}\nWhich plan do you choose? Answer with the letter A or B only.",
+  "options": {"x": "{sure}", "y": "{risky}"},
+  "grid": {
+    "scenario": [
+      {"scenario": "wildfire", "context": "A wildfire is moving toward a valley with 600 homes in it. The fire crews can follow one of two plans.",
+       "total": "600", "things": "homes", "kept": "200", "lost": "400", "survive": "are saved", "perish": "burn down"},
+      {"scenario": "factory", "context": "A factory that employs 900 people is about to shut down. The board can back one of two rescue plans.",
+       "total": "900", "things": "jobs", "kept": "300", "lost": "600", "survive": "are kept", "perish": "are lost"},
+      {"scenario": "harbor", "context": "A storm is about to hit a harbor where 300 fishing boats are moored. The harbor master can follow one of two plans.",
+       "total": "300", "things": "boats", "kept": "100", "lost": "200", "survive": "come through undamaged", "perish": "are wrecked"},
+      {"scenario": "library", "context": "Flood water is rising in a library that holds 1,200 rare manuscripts. The staff can follow one of two plans.",
+       "total": "1,200", "things": "manuscripts", "kept": "400", "lost": "800", "survive": "are rescued", "perish": "are destroyed"},
+      {"scenario": "laptops", "context": "A virus is spreading through a company's 1,500 laptops. The IT team can follow one of two plans.",
+       "total": "1,500", "things": "laptops", "kept": "500", "lost": "1,000", "survive": "are kept safe", "perish": "are wiped"}
+    ],
+    "frame": [
+      {"frame": "gain", "sure": "{kept} of the {total} {things} {survive}.",
+       "risky": "There is a 1 in 3 chance that all {total} {things} {survive}, and a 2 in 3 chance that none do."},
+      {"frame": "loss", "sure": "{lost} of the {total} {things} {perish}.",
+       "risky": "There is a 1 in 3 chance that none of the {things} {perish}, and a 2 in 3 chance that all {total} do."}
+    ]
+  },
+  "fit": {"type": "difference", "field": "frame", "a": "loss", "b": "gain"},
+  "method": "Each scenario offers a sure plan and a gamble with the same expected outcome, written twice: once in terms of what is saved (gain frame) and once in terms of what is lost (loss frame). The outcomes are identical, so a consistent chooser picks the same plan both times. People tend to play safe when options are described as gains and gamble when they are described as losses. The framing effect is the share choosing the gamble in the loss frame minus the gain frame: 0 means the wording made no difference, positive is the human-like pattern, negative the reverse. Scenarios are resampled whole, so each scenario's two frames stay paired."
+}

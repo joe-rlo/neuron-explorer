@@ -838,7 +838,8 @@ def _run_task(job, b, task, cfg):
                 boots[d] = bo
                 if d == 0:  # the readout: the fitted parameter, or the choice rate when the baseline fit sits at its bound
                     use = "rate" if f.get("at_bound") and task["kind"] == "choice" and task.get("rate") else "value"
-                    measure = {"name": task["rate"], "type": "contains"} if use == "rate" else {"name": name, "type": "task"}
+                    measure = {"name": task["rate"] if use == "rate" else name,
+                               "type": "contains" if use == "rate" or task.get("percent") else "task"}
                 raw[d] = {"values": vals, "measure": vals, "coherence": valid, "script": [0.0] * len(items),
                           "probs": [[probs[(d, j, o)].tolist() for o in (0, 1)] for j in range(len(items))]}
                 est = {k: {"n": len(items), "mean": f[k], "ci": tk.ci(bo[k])} for k in ("value", "rate")}

@@ -1363,7 +1363,7 @@ $("#lab-nav").onclick = e => {
   LAB.view = b.dataset.l; document.querySelectorAll("#lab-nav button").forEach(x => x.classList.toggle("on", x === b)); renderLab();
 };
 function renderLab() {
-  ({ notebook: renderNotebook, challenges: renderChallenges })[LAB.view]?.();
+  ({ notebook: renderNotebook, challenges: renderChallenges, guess: renderGuess })[LAB.view]?.();
 }
 const when = ts => { const d = new Date(ts); return isNaN(d) ? "" : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toTimeString().slice(0, 5)}`; };
 const neuronChip = x => `<span class="chip nchip" data-l="${x.layer}" data-n="${x.n}" title="open this neuron">L${x.layer} N${x.n}</span>`;
@@ -1389,6 +1389,8 @@ async function renderNotebook() {
 $("#lab-body").addEventListener("click", e => {
   if (e.target.id === "nb-only") { LAB.only = e.target.checked; renderNotebook(); return; }
   const ca = e.target.closest(".ch-go"); if (ca) { runChallenge(ca.closest(".ch").dataset.id); return; }
+  if (e.target.id === "g-new") { newGuess(); return; }
+  const go = e.target.closest(".g-opt"); if (go) { answerGuess(+go.dataset.k); return; }
   if (e.target.closest(".ch-cancel") && CH.run?.job) { api("/api/experiment/cancel", { id: CH.run.job }).catch(() => {}); return; }
   const c = e.target.closest(".nchip"); if (c) { goToNeuron(+c.dataset.l, +c.dataset.n); return; }
   const v = e.target.closest(".vseg[data-id] button[data-v]");
@@ -1455,6 +1457,54 @@ async function runChallenge(id) {
     });
   } catch (err) { r.error = String(err); }
   finally { X.job = null; r.live = false; if (curTab() === "lab" && LAB.view === "challenges") renderChallenges(); }
+}
+
+// ---- guess the neuron: a hidden neuron's replies at +dose and −dose; its label among three others of the same kind ----
+const G = { score: null, round: null };
+async function renderGuess() {
+  const el = $("#lab-body");
+  if (!G.score) { try { G.score = await api("/api/game/guess"); } catch (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; } }
+  if (curTab() !== "lab" || LAB.view !== "guess") return;
+  const sc = G.score, r = G.round;
+  const head = `<div class="nb-head"><span class="mono">${sc.correct}/${sc.played} right · streak ${sc.streak} · best ${sc.best}</span>
+    <button type="button" id="g-new" class="xbtn"${r?.live || X.job ? " disabled" : ""}>${r ? "next round" : "start a round"}</button></div>`;
+  if (!r) { el.innerHTML = head + `<div class="xnote dim">A round picks a hidden neuron: one you've named, or one whose lens agrees on a single word. You see its replies to one prompt pushed up (▲) and pushed down (▼), then pick its label from four.</div>`; return; }
+  const col = (c, k) => `<div class="col ${k}"><span class="lab">${k === "up" ? "▲" : "▼"} ${fmtDose(c ? -r.dose : r.dose)}</span>${r.replies[c].map(t => `<div class="g-reply txt">${esc(t)}</div>`).join("")}</div>`;
+  const opts = r.options ? r.options.map((o, k) => {
+    const cls = r.result ? (k === r.result.answer ? " right" : k === r.picked ? " wrong" : "") : "";
+    return `<button type="button" class="g-opt${cls}" data-k="${k}"${r.result || r.live ? " disabled" : ""}>${esc(o)}</button>`;
+  }).join("") : "";
+  const res = r.result ? `<div class="xline">${r.result.correct ? "Right." : "Not this time."} It was ${neuronChip(r.result.truth)}, labeled from ${r.result.truth.source === "name" ? "your name for it" : "its logit lens"}.</div>` : "";
+  el.innerHTML = head + `<div class="recipe mono dim">“${esc(r.prompt || "")}”${r.live ? " · writing…" : ""}</div>`
+    + `<div class="turn"><div class="cols two">${col(0, "up")}${col(1, "down")}</div></div>`
+    + (r.error ? `<div class="err">${esc(r.error)}</div>` : "")
+    + `<div class="g-opts">${opts}</div>${r.live && r.options ? `<div class="xnote dim">answer once the replies finish</div>` : ""}${res}`;
+}
+async function newGuess() {
+  if (X.job || G.round?.live) return;
+  const r = G.round = { live: true, replies: [[], []], picked: null };
+  renderGuess();
+  let s;
+  try { s = await api("/api/game/guess", {}); } catch (err) { s = { error: err.message }; }
+  if (s.error) { Object.assign(r, { live: false, error: s.error }); renderGuess(); return; }
+  X.job = { id: s.id };
+  try {
+    await sse(await fetch(`/api/experiment/events?id=${s.id}`), ev => {
+      if (ev.error) r.error = ev.error;
+      if (ev.round) { Object.assign(r, ev.round); r.replies = [Array(ev.round.samples).fill(""), Array(ev.round.samples).fill("")]; }
+      if (ev.row != null) r.replies[ev.row][ev.s] += ev.t;
+      if (ev.end) r.live = false;
+      if (curTab() === "lab" && LAB.view === "guess") renderGuess();
+    });
+  } catch (err) { r.error = String(err); }
+  finally { X.job = null; r.live = false; if (curTab() === "lab" && LAB.view === "guess") renderGuess(); }
+}
+async function answerGuess(k) {
+  const r = G.round; if (!r || r.live || r.result) return;
+  r.picked = k;
+  try { r.result = await api("/api/game/guess/answer", { round: r.id, pick: k }); G.score = r.result.score; }
+  catch (err) { r.error = err.message; }
+  renderGuess();
 }
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------

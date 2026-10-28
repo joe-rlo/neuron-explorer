@@ -14,6 +14,9 @@
   "mean_tokens": 10000,
   "task_batch": 32,
   "task_bootstrap": 500,
+  "guess": {"dose": 0.8, "samples": 2, "max_new": 60, "min_layer": 12,
+            "prompts": ["Tell me about your weekend.", "Describe a place you like to visit.", "What's a good way to start the day?",
+                        "Write a short note to a friend.", "What should I cook tonight?", "Tell me a short story."]},
   "stimuli": [
     {"name": "food vs non-food", "template": "Let's talk about {item}.", "items": [
       {"text": "pizza", "category": "food"}, {"text": "burger", "category": "food"}, {"text": "sushi", "category": "food"},

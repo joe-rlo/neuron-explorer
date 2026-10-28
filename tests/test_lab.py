@@ -84,3 +84,26 @@ def test_best_orders_by_the_challenges_constraint():
          {"challenge": "other", "passed": True, "dose": 0.05, "neurons": [1]}]
     assert [x["dose"] for x in lab.best(CH, a)] == [-0.3, 0.6]
     assert [x["dose"] for x in lab.best({**CH, "minimize": "neurons"}, a)] == [0.6, -0.3]
+
+
+# ---------- guess the neuron ----------
+def test_lens_theme_needs_agreement():
+    assert lab.lens_theme([" class", "class", " Class", " classes", " classe", "-class", "Class", "_class"]) == "class · classe · classes"  # ties: shorter first
+    assert lab.lens_theme([" meet", " meeting", " meets", " met", " Meeting", "meeting", " Meet", "Meeting"]) == "meeting · meet · meets"
+    assert lab.lens_theme(["neutral", "Neutral", "jobb", " neutral", "临走", "数值", "_x", " جما"]) is None  # too few words
+    assert lab.lens_theme([" apple", " river", " stone", " cloud", " table", " music", " paper", " light"]) is None  # no theme
+
+
+def test_guess_options_distinct_and_contains_truth():
+    import numpy as np
+    pool = ["curve · curves", "curved", "stock · stocks", "meeting · meet", "random · Random", "class · classes"]
+    for seed in range(20):
+        opts, i = lab.guess_options("curve · curves", pool, np.random.default_rng(seed))
+        assert len(opts) == 4 and opts[i] == "curve · curves"
+        assert "curved" not in opts  # shares the stem "curve"
+        assert all(not lab._stems(a) & lab._stems(b) for a in opts for b in opts if a != b)
+
+
+def test_guess_score_streaks():
+    h = [{"correct": c} for c in (True, True, False, True, True, True, False, True)]
+    assert lab.guess_score(h) == {"played": 8, "correct": 6, "streak": 1, "best": 3}

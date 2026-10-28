@@ -1077,6 +1077,107 @@ def _run_challenge(job, b, ch, cfg):
         job["done"] = True
 
 
+# ---------- guess the neuron: a hidden neuron's replies at +dose and −dose, its label among three distractors ----------
+GAMES = os.path.join(EXPERIMENTS, "games.json")
+_guess = {"pool": None, "rounds": {}}
+
+
+def _guess_pool(min_layer):
+    """(layer, n, label, source) for every named neuron (source "name") and every neuron from min_layer up whose
+    logit lens agrees on one word (source "lens"), built once."""
+    if _guess["pool"] is None:
+        idx, vocab = lens_index(), rt.vocab_strings()
+        pool = []
+        if idx is not None:
+            up = idx["up"]
+            for layer in range(min_layer, up.shape[0]):
+                for n in range(up.shape[1]):
+                    lab_ = lab.lens_theme([vocab[t] for t in up[layer, n, :8]])
+                    if lab_:
+                        pool.append((layer, n, lab_, "lens"))
+        _guess["pool"] = pool
+    named = [(int(k.split("/")[0][1:]), int(k.split("/N")[1]), v, "name") for k, v in names().items()]
+    return named, _guess["pool"]
+
+
+def _guess_log():
+    return _read_json(GAMES, {}).get("guess", [])
+
+
+@app.get("/api/game/guess")
+def guess_score():
+    return lab.guess_score(_guess_log())
+
+
+@app.post("/api/game/guess")
+async def guess_new(req: Request):
+    """Starts a round as a background job: picks a hidden neuron (a named one about half the time when you have named
+    some), streams its replies to one prompt pushed by +dose and by −dose, and offers its label among three
+    distractors of the same kind. Answer with /api/game/guess/answer."""
+    if off := _live_off():
+        return off
+    import uuid
+    cfg = exm.config()
+    job = {"id": uuid.uuid4().hex[:12], "events": [], "cancel": threading.Event(), "done": False}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_guess, args=(job, cfg["guess"], cfg), daemon=True).start()
+    return {"id": job["id"]}
+
+
+def _run_guess(job, g, cfg):
+    emit = job["events"].append
+    try:
+        rng = np.random.default_rng()
+        emit({"start": True})
+        named, lensed = _guess_pool(g["min_layer"])
+        use = named if len(named) >= 4 and (not lensed or rng.random() < 0.5) else lensed
+        if not use:
+            raise ValueError("no neurons to guess: name a few, or build the lens index")
+        layer, n, label, source = use[rng.integers(len(use))]
+        others = [x[2] for x in use if (x[0], x[1]) != (layer, n)]
+        options, answer = lab.guess_options(label, [others[i] for i in rng.permutation(len(others))[:400]], rng)
+        prompt, dose, k = g["prompts"][rng.integers(len(g["prompts"]))], float(g["dose"]), int(g["samples"])
+        rid = job["id"]
+        _guess["rounds"][rid] = {"layer": layer, "n": n, "label": label, "source": source, "options": options,
+                                 "answer": answer, "prompt": prompt, "dose": dose}
+        emit({"round": {"id": rid, "options": options, "prompt": prompt, "dose": dose, "samples": k}})
+        rt.ensure_loaded()
+        rows = [(c, i) for c in (0, 1) for i in range(k)]
+        seed = int(rng.integers(2 ** 31 - k))
+        with rt.lock:
+            push = [rt.push_rows(layer, n, "add", [dose if c == 0 else -dose for c, _ in rows])]
+        for r, delta in rt.generate(push, [[{"role": "user", "content": prompt}]] * len(rows), int(g["max_new"]), job["cancel"],
+                                    [seed + i for _, i in rows], cfg["temperature"]):
+            if r is not None:
+                emit({"row": rows[r][0], "s": rows[r][1], "t": delta})
+        emit({"end": True, "cancelled": job["cancel"].is_set()})
+    except Exception as e:
+        emit({"error": repr(e)})
+        emit({"end": True, "cancelled": True})
+    finally:
+        job["done"] = True
+
+
+@app.post("/api/game/guess/answer")
+async def guess_answer(req: Request):
+    """Scores a pick (an option index) for a round and reveals the neuron. Every answered round is kept in
+    experiments/games.json."""
+    import datetime
+    b = await req.json()
+    r = _guess["rounds"].pop(b.get("round"), None)
+    if r is None:
+        return JSONResponse({"error": "that round is over or expired (the server restarted)"}, status_code=404)
+    pick = int(b["pick"])
+    games = _read_json(GAMES, {})
+    games.setdefault("guess", []).append({"time": datetime.datetime.now().isoformat(timespec="seconds"), "layer": r["layer"],
+                                          "n": r["n"], "label": r["label"], "source": r["source"], "options": r["options"],
+                                          "picked": r["options"][pick], "correct": pick == r["answer"], "prompt": r["prompt"],
+                                          "dose": r["dose"]})
+    _write_json(GAMES, games)
+    return {"correct": pick == r["answer"], "answer": r["answer"],
+            "truth": {k: r[k] for k in ("layer", "n", "label", "source")}, "score": lab.guess_score(games["guess"])}
+
+
 @app.post("/api/experiment/verdict")
 async def experiment_verdict(req: Request):
     """Marks an experiment's prediction confirmed, disconfirmed or inconclusive (null clears it). The prediction

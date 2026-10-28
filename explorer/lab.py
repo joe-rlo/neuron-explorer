@@ -1,7 +1,8 @@
 """Lab: the records and games built on experiment mode. The notebook's one-line view of each saved experiment (what
-was run, its result and the prediction made before it), blind rating's binomial test and challenge scoring. Pure
-python; storage and the model are in server.py.
+was run, its result and the prediction made before it), blind rating's binomial test, challenge scoring and the
+labels for guess the neuron. Pure python; storage and the model are in server.py.
 """
+import collections
 import math
 import re
 
@@ -134,3 +135,48 @@ def rank_key(ch, a):
 def best(ch, attempts, k=5):
     """The k best passing attempts at a challenge."""
     return sorted((a for a in attempts if a["challenge"] == ch["id"] and a["passed"]), key=lambda a: rank_key(ch, a))[:k]
+
+
+# ---------- guess the neuron ----------
+def lens_theme(tokens):
+    """A neuron's lens label when its top logit-lens tokens agree on one word, else None. Clear means at least 6 of the
+    tokens are plain words of 4+ letters and 4 of those share their first 4 letters; the label is that group's three
+    most common forms (shortest first on ties), e.g. "class · classes · classe"."""
+    clean = [t.strip().lower() for t in tokens if re.fullmatch(r"\s?[A-Za-z]{4,}", t)]
+    if len(clean) < 6:
+        return None
+    stem, k = collections.Counter(w[:4] for w in clean).most_common(1)[0]
+    if k < 4:
+        return None
+    forms = collections.Counter(w for w in clean if w[:4] == stem)
+    return " · ".join(sorted(forms, key=lambda w: (-forms[w], len(w), w))[:3])
+
+
+def _stems(label):
+    return {w[:4] for w in re.findall(r"[a-z]{3,}", label.lower())}
+
+
+def guess_options(truth, pool, rng, k=3):
+    """The true label among k distractors from pool that share no 4-letter stem with it or with each other, shuffled.
+    Returns (options, index of the truth)."""
+    seen, out = _stems(truth), []
+    for i in rng.permutation(len(pool)):
+        lab = pool[i]
+        st = _stems(lab)
+        if lab != truth and st and not st & seen:
+            out.append(lab)
+            seen |= st
+            if len(out) == k:
+                break
+    opts = out + [truth]
+    order = list(rng.permutation(len(opts)))
+    return [opts[j] for j in order], order.index(len(opts) - 1)
+
+
+def guess_score(history):
+    """Rounds played, correct, the current streak and the best streak."""
+    streak = best_ = 0
+    for h in history:
+        streak = streak + 1 if h["correct"] else 0
+        best_ = max(best_, streak)
+    return {"played": len(history), "correct": sum(h["correct"] for h in history), "streak": streak, "best": best_}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuron Explorer</title>
-<link rel="stylesheet" href="style.css?v=82">
+<link rel="stylesheet" href="style.css?v=83">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%23151515%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%23ffd27a%22/%3E%3C/svg%3E">
 <script type="importmap">
 {"imports": {
@@ -26,6 +26,7 @@
   <span class="seg" id="q-mode"><button data-q="lens" class="on" title="lens: find neurons whose lens has a token containing your text, i.e. neurons that push the model toward or away from it">lens</button><button data-q="fires" title="fires: run your text through the model and list the neurons that fire most on it">fires</button></span>
   <input id="lens-q" placeholder="search lens" aria-label="search" spellcheck="false" autocomplete="off">
   <span id="status" class="mono"></span>
+  <button id="learn-btn" class="dim" title="Learn: how a language model works, step by step, on a sentence you type">learn</button>
   <button id="lab-btn" class="dim" title="Lab: the notebook of every experiment, the field guide and the games">lab</button>
   <button id="tour-btn" class="dim" title="show the tour of the main controls" aria-label="tour">?</button>
   <span id="jump-note" class="mono" role="status"></span>
@@ -95,7 +96,7 @@
   <button id="list-tab" class="tab-edge left" aria-label="show list" title="show the list panel">›</button>
   <button id="focus-tab" class="tab-edge right mono" aria-label="show neuron"></button>
   <aside id="focus" class="float">
-    <nav id="tabs"><button data-tab="examples" class="on">Examples</button><button data-tab="chat">Chat</button><button data-tab="details">Details</button><button data-tab="tuning" title="tuning curve: this neuron's response to each item of a stimulus set">Tuning</button><button data-tab="lab" title="the notebook of every experiment, the field guide, and the games">Lab</button><button data-tab="claude">Claude</button><select id="a-agent" class="mono dim" title="agent for new conversations"><option value="claude">claude</option><option value="codex">codex</option></select><button id="a-past" class="mono dim" title="past conversations">past</button><button id="a-new" class="mono dim" title="start a new conversation">new</button><button id="f-collapse" class="edge" aria-label="collapse">›</button></nav>
+    <nav id="tabs"><button data-tab="examples" class="on">Examples</button><button data-tab="chat">Chat</button><button data-tab="details">Details</button><button data-tab="tuning" title="tuning curve: this neuron's response to each item of a stimulus set">Tuning</button><button data-tab="learn" title="how a language model works, step by step, on a sentence you type">Learn</button><button data-tab="lab" title="the notebook of every experiment, the field guide, and the games">Lab</button><button data-tab="claude">Claude</button><select id="a-agent" class="mono dim" title="agent for new conversations"><option value="claude">claude</option><option value="codex">codex</option></select><button id="a-past" class="mono dim" title="past conversations">past</button><button id="a-new" class="mono dim" title="start a new conversation">new</button><button id="f-collapse" class="edge" aria-label="collapse">›</button></nav>
     <div id="tab-examples" class="tab on"></div>
     <div id="tab-chat" class="tab">
       <div id="c-lens"></div>
@@ -144,6 +145,11 @@
       <div id="t-editor" hidden></div>
       <div id="t-body"></div>
     </div>
+    <div id="tab-learn" class="tab">
+      <div id="ln-top"><input id="ln-text" class="mono" spellcheck="false" aria-label="your sentence" title="every chapter uses this sentence"><label class="dim" title="show the proper names and the math alongside the plain explanation"><input type="checkbox" id="ln-real"> real terms</label></div>
+      <nav id="ln-nav" class="seg"></nav>
+      <div id="ln-body"></div>
+    </div>
     <div id="tab-lab" class="tab">
       <nav id="lab-nav" class="seg"><button type="button" data-l="notebook" class="on" title="every saved experiment, newest first, with its prediction and verdict">notebook</button><button type="button" data-l="guide" title="a card per named neuron: hypothesis, confidence, dose-response, windows, lesion, tuning and evidence">field guide</button><button type="button" data-l="guess" title="a hidden neuron's replies pushed up and down: pick its label from four">guess the neuron</button><button type="button" data-l="challenges" title="steer the model to a goal with the smallest dose or the fewest neurons, without breaking the text">challenges</button></nav>
       <div id="lab-body"></div>
@@ -157,6 +163,6 @@
   </aside>
 </main>
 <div id="tour" hidden><div id="tour-ring"></div><div id="tour-card" role="dialog" aria-label="tour"></div></div>
-<script type="module" src="app.js?v=149"></script>
+<script type="module" src="app.js?v=150"></script>
 </body>
 </html>

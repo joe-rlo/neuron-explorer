@@ -567,10 +567,10 @@ $("#focus-tab").onclick = () => focusEl.classList.contains("on") ? setFocusColla
 
 // ---------- focus panel ----------
 const focusEl = $("#focus");
-// closing the neuron keeps the panel up when Claude or Lab is the open tab
+// closing the neuron keeps the panel up when Claude, Lab or Learn is the open tab
 $("#f-close").onclick = () => { flushName(); if (running) running.abort(); state.focus = null; $("#list").classList.remove("has-focus");
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
-  if (curTab() === "claude" || curTab() === "lab") syncTabs(); else focusEl.classList.remove("on");
+  if (["claude", "lab", "learn"].includes(curTab())) syncTabs(); else focusEl.classList.remove("on");
   setFocusCollapsed(false); map.select(null); refreshWeb(); renderAgentActions(); scatter.select(null, null); saveFocus(); renderList(); };
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const tabBtn = t => $(`#tabs button[data-tab="${t}"]`);
@@ -582,10 +582,11 @@ function setTab(t) {
   tabBtn(t).classList.remove("fresh");
   if (t === "claude") { const th = $("#a-thread"); th.scrollTop = th.scrollHeight; }
   if (t === "lab") renderLab();
+  if (t === "learn") renderLearn();
 }
 // a tab that changed while another was showing gets a dot until opened
 function markFresh(t) { if (curTab() !== t) tabBtn(t).classList.add("fresh"); }
-// neuron tabs show while a neuron is open (Chat for real neurons only); Lab and Claude always
+// neuron tabs show while a neuron is open (Chat for real neurons only); Learn, Lab and Claude always
 function syncTabs() {
   const f = state.focus?.kind === "head" ? null : state.focus;
   for (const t of ["examples", "details"]) tabBtn(t).style.display = f ? "" : "none";
@@ -1649,6 +1650,134 @@ async function cardPNG() {
   }
   cv.toBlob(b => download(b, cardFile("png")), "image/png");
 }
+
+// ---------- learn: how a language model works, in short chapters run live on one sentence ----------
+// Each chapter is a plain explanation, an optional "real terms" note with the math, one live picture, a key, a
+// suggestion and a check question. Progress, the sentence and the real-terms switch are kept in this browser.
+const LN = { ch: 0, real: false, done: new Set(), text: "The cat sat on the", gen: 0, toks: null, pick: {}, cache: {} };
+try {
+  const s = JSON.parse(localStorage.getItem("ne.learn") || "{}");
+  Object.assign(LN, { ch: s.ch || 0, real: !!s.real, done: new Set(s.done || []), text: s.text || LN.text });
+} catch {}
+function saveLearn() {
+  try { localStorage.setItem("ne.learn", JSON.stringify({ ch: LN.ch, real: LN.real, done: [...LN.done], text: LN.text })); } catch {}
+}
+const lnTok = s => esc(s.replace(/ /g, "·").replace(/\n/g, "⏎")) || "∅";
+const lnPct = p => p >= 0.995 ? "100%" : p >= 0.1 ? `${Math.round(p * 100)}%` : p >= 0.001 ? `${(p * 100).toFixed(1)}%` : "<0.1%";
+const lnInt = n => Number(n).toLocaleString();
+// the sentence's tokens and the model's shape, fetched once per sentence and shared by every chapter
+async function lnTokens() {
+  if (LN.toks?.text !== LN.text) LN.toks = { text: LN.text, ...(await api("/api/learn/tokens", { text: LN.text })) };
+  return LN.toks;
+}
+// a row of the sentence's tokens to pick one from; `at` is the picked index
+const tokPicker = (toks, at) => `<div class="ln-toks">${toks.map(([, s], i) =>
+  `<button type="button" class="ln-tok${i === at ? " on" : ""}" data-p="${i}">${lnTok(s)}</button>`).join("")}</div>`;
+const pickOf = (ch, toks, dflt) => { const p = LN.pick[ch]; return p != null && p < toks.length ? p : dflt; };
+
+const CHAPTERS = [
+  { id: "tokens", title: "Words become tokens",
+    text: "A language model never sees letters or words. It first cuts your sentence into <b>tokens</b>: a common word is one token, a rare word is split into pieces, and the space before a word usually belongs to the word. Each token is then just a number, its place in a fixed list the model was trained with.",
+    real: a => `This is <b>byte-pair encoding</b> (BPE): start from single bytes and keep merging the pair seen most often in training text. This model's vocabulary has <code>V = ${lnInt(a.vocab)}</code> entries, and a text becomes a list of ids <code>t₁ … t_T</code>, each <code>0 ≤ tᵢ &lt; V</code>.`,
+    key: "Each box is one token, and the small number under it is its id. A · is a space that belongs to the token.",
+    tryit: "Type a long, rare word like “antidisestablishmentarianism”, a typo, or a sentence in another language, and count the tokens.",
+    quiz: { q: "Why can “ cat” and “cat” be different tokens?", a: 1,
+      options: ["The model ignores capital letters", "The space in front is part of the token", "Tokens are always whole words"],
+      why: "The leading space is stored inside the token, so “ cat” in the middle of a sentence and “cat” at the start get different ids." },
+    async live(el, g) {
+      const t = await lnTokens(); if (g !== LN.gen) return;
+      const chars = [...LN.text].length;
+      el.innerHTML = `<div class="ln-toks big">${t.tokens.map(([id, s]) => `<span class="ln-tok"><b>${lnTok(s)}</b><small>${id}</small></span>`).join("")}</div>
+        <div class="xnote dim">${t.tokens.length} token${t.tokens.length === 1 ? "" : "s"} from ${chars} characters · a vocabulary of ${lnInt(t.vocab)} tokens</div>`;
+    } },
+  { id: "embed", title: "Tokens become lists of numbers",
+    text: "A number like 7993 means nothing by itself, so the model looks each token up in a table and swaps it for a long list of numbers, a <b>vector</b>. Tokens that get used in similar ways end up with similar vectors, so meaning turns into position: “cat” sits near “cats”, near other spellings of cat, and even near the Chinese word for cat.",
+    real: a => `The <b>embedding</b> is one row of a matrix, <code>x = E[t]</code> with <code>E ∈ ℝ^(V×d)</code> and <code>d = ${lnInt(a.hidden)}</code> numbers per token. Closeness is the <b>cosine similarity</b>, <code>cos(a, b) = a·b / (‖a‖ ‖b‖)</code>: 1 for the same direction, near 0 for unrelated ones.`,
+    key: "Pick a token. The bars show the tokens whose vectors point most nearly the same way (cosine similarity; 1 would be the same direction). Variants that differ only in capitals or spaces are folded together.",
+    tryit: "Pick a common word, then a name or a number. Which neighbors are about meaning, and which are only about spelling?",
+    quiz: { q: "What makes two tokens neighbors here?", a: 2,
+      options: ["They sit next to each other in your sentence", "Their ids are close together", "Their vectors point in nearly the same direction"],
+      why: "Neighbors are measured by the angle between the two vectors, not by position or id." },
+    async live(el, g) {
+      const t = await lnTokens(); if (g !== LN.gen) return;
+      const longest = t.tokens.reduce((b, [, s], i) => s.trim().length > t.tokens[b][1].trim().length ? i : b, 0);
+      const at = pickOf("embed", t.tokens, longest), id = t.tokens[at][0];
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="xnote dim">looking up ${lnTok(t.tokens[at][1])}…</div>`;
+      const key = `nb/${id}`, r = LN.cache[key] ||= await api("/api/learn/neighbors", { id }); if (g !== LN.gen) return;
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="lab">nearest to ${lnTok(r.token)} among ${lnInt(t.vocab)} tokens, each a list of ${lnInt(r.hidden)} numbers</div>`
+        + `<div class="ln-bars">${r.neighbors.map(([s, c]) => `<div class="ln-bar"><span class="mono">${lnTok(s)}</span><i style="width:${Math.max(2, c * 100)}%"></i><b class="mono">${c.toFixed(2)}</b></div>`).join("")}</div>`;
+    } },
+  { id: "layers", title: "Passing through the layers",
+    text: "Those vectors now pass through 32 <b>layers</b>. Each layer reads the running vector at every token, adds a small correction and passes it on, like editors marking up the same draft in turn. We can peek at the draft after any layer and ask: if the model had to name the next word right now, what would it say? The early layers look like noise; the answer usually forms in the last few.",
+    real: () => `The running vector is the <b>residual stream</b>: <code>h(l+1) = h(l) + attn_l(h) + mlp_l(h)</code>. The <b>logit lens</b> reads it at layer <code>l</code> as <code>softmax(W_U · norm(h(l)))</code>, borrowing the final norm and the unembedding <code>W_U</code> that the model only meant for the last layer, so the early rows are a rough, biased reading.`,
+    key: "One row per layer, first at the top. The word is that layer's top guess for the next token. The bar is how much that layer already believes the model's final answer. ◆ marks layers with full attention (next chapter). Click a row to fly the map to that layer.",
+    tryit: "Pick another word of your sentence to see the guesses at that point. Then try a sentence with an obvious ending, like “The capital of France is”.",
+    quiz: { q: "Why do the early layers' guesses look like random tokens?", a: 0,
+      options: ["The meaning is still being built, and the lens reads it with tools meant for the last layer", "The early layers are broken", "The early layers only see the first word"],
+      why: "Every layer adds to the same running vector; the lens just reads it early, before it's in a shape the output step understands." },
+    async live(el, g) {
+      const t = await lnTokens(); if (g !== LN.gen) return;
+      const at = pickOf("layers", t.tokens, t.tokens.length - 1);
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="xnote dim">reading all 32 layers…</div>`;
+      const key = `lens/${LN.text}/${at}`, r = LN.cache[key] ||= await api("/api/learn/lens", { text: LN.text, pos: at }); if (g !== LN.gen) return;
+      const [w, p] = r.layers[r.layers.length - 1].top[0];
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="lab">after “…${lnTok(r.token)}” the model's final answer is <b class="ln-ans">${lnTok(r.answer)}</b> (${lnPct(p)})</div>`
+        + `<div class="ln-layers">${r.layers.map((x, l) => `<div class="ln-layer" data-l="${l}" title="layer ${l}: ${x.top.map(([s, q]) => `${s.replace(/\n/g, "⏎")} ${lnPct(q)}`).join(" · ")}">
+          <span class="mono dim">L${l}</span><span class="dim">${r.types[l] === "full_attention" ? "◆" : ""}</span>
+          <span class="mono${x.top[0][0] === r.answer ? " ln-ans" : ""}">${lnTok(x.top[0][0])}</span><span class="mono dim">${lnPct(x.top[0][1])}</span>
+          <span class="ln-meter"><i style="width:${Math.max(0.5, x.final * 100)}%"></i></span></div>`).join("")}</div>`;
+    } },
+];
+
+function renderLearn() {
+  const c = CHAPTERS[LN.ch] || CHAPTERS[0];
+  if ($("#ln-text").value !== LN.text && document.activeElement !== $("#ln-text")) $("#ln-text").value = LN.text;
+  $("#ln-real").checked = LN.real;
+  $("#ln-nav").innerHTML = CHAPTERS.map((x, i) => `<button type="button" data-c="${i}" class="${i === LN.ch ? "on" : ""}" title="${esc(x.title)}">${LN.done.has(x.id) ? "✓" : i + 1}</button>`).join("");
+  const q = c.quiz, arch = LN.toks?.arch ? { ...LN.toks.arch, vocab: LN.toks.vocab } : { vocab: 248077, hidden: 2560 };
+  $("#ln-body").innerHTML = `<div class="lab">chapter ${LN.ch + 1} of ${CHAPTERS.length}</div><h3 class="ln-title">${esc(c.title)}</h3>
+    <p class="ln-text">${c.text}</p>${LN.real ? `<div class="ln-real"><div class="lab">real terms</div>${c.real(arch)}</div>` : ""}
+    <div id="ln-live" class="ln-live"></div>
+    <div class="ln-note"><div class="lab">what you're looking at</div>${c.key}</div>
+    <div class="ln-note"><div class="lab">try this</div>${c.tryit}</div>
+    <div class="ln-quiz"><div class="lab">check</div><div>${esc(q.q)}</div>${q.options.map((o, i) => `<button type="button" class="ln-opt" data-o="${i}">${esc(o)}</button>`).join("")}<div class="ln-fb"></div></div>
+    <div class="ln-foot">${LN.ch > 0 ? `<button type="button" class="xbtn" data-go="-1">‹ ${esc(CHAPTERS[LN.ch - 1].title)}</button>` : "<span></span>"}${LN.ch < CHAPTERS.length - 1 ? `<button type="button" class="xbtn" data-go="1">${esc(CHAPTERS[LN.ch + 1].title)} ›</button>` : ""}</div>`;
+  renderLearnLive();
+}
+async function renderLearnLive() {
+  const g = ++LN.gen, el = $("#ln-live"), c = CHAPTERS[LN.ch];
+  if (!el.innerHTML) el.innerHTML = `<div class="xnote dim">running your sentence through the model…</div>`;
+  try { await c.live(el, g); }
+  catch (err) { if (g === LN.gen) el.innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+  // the real-terms note may quote sizes that only arrive with the first tokens call
+  if (g === LN.gen && LN.real && LN.toks?.arch) $(".ln-real").innerHTML = `<div class="lab">real terms</div>${c.real({ ...LN.toks.arch, vocab: LN.toks.vocab })}`;
+}
+function showLearn(ch) {
+  if (ch != null) { LN.ch = ch; saveLearn(); }
+  if (curTab() === "learn") renderLearn(); else { focusEl.classList.add("on"); syncTabs(); setTab("learn"); setFocusCollapsed(false); }
+  $("#ln-body").scrollTop = 0;
+}
+$("#learn-btn").onclick = () => showLearn();
+$("#ln-nav").onclick = e => { const b = e.target.closest("button"); if (b) showLearn(+b.dataset.c); };
+$("#ln-real").onchange = e => { LN.real = e.target.checked; saveLearn(); renderLearn(); };
+let lnTimer;
+$("#ln-text").addEventListener("input", e => {
+  clearTimeout(lnTimer);
+  lnTimer = setTimeout(() => { const t = e.target.value.trim(); if (!t || t === LN.text) return; LN.text = t; LN.pick = {}; saveLearn(); renderLearnLive(); }, 600);
+});
+$("#ln-body").addEventListener("click", e => {
+  const go = e.target.closest("[data-go]"); if (go) return showLearn(LN.ch + +go.dataset.go);
+  const tk = e.target.closest("button.ln-tok"); if (tk) { LN.pick[CHAPTERS[LN.ch].id] = +tk.dataset.p; return renderLearnLive(); }
+  const lay = e.target.closest(".ln-layer"); if (lay) { if (map.layerMode !== null) map.exitLayer(); map.viewLayer(+lay.dataset.l); return; }
+  const o = e.target.closest(".ln-opt");
+  if (o) {
+    const c = CHAPTERS[LN.ch], ok = +o.dataset.o === c.quiz.a;
+    o.closest(".ln-quiz").querySelectorAll(".ln-opt").forEach(b => b.classList.toggle("picked", b === o));
+    o.classList.add(ok ? "right" : "wrong");
+    $(".ln-fb").innerHTML = ok ? `Right. ${esc(c.quiz.why)}` : "Not quite. Try another answer.";
+    if (ok && !LN.done.has(c.id)) { LN.done.add(c.id); saveLearn(); $(`#ln-nav button[data-c="${LN.ch}"]`).textContent = "✓"; }
+  }
+});
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
 const T = { sets: [], scores: {}, pending: new Set(), running: false };

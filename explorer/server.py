@@ -1309,13 +1309,13 @@ def _learn_ids(text):
 
 @app.post("/api/learn/tokens")
 async def learn_tokens(req: Request):
-    """A text split into the model's tokens: [[id, token string]] and the vocabulary size."""
+    """A text split into the model's tokens: [[id, token string]], the vocabulary size and the model's shape."""
     b = await req.json()
     if off := _live_off():
         return off
     ids = await asyncio.to_thread(_learn_ids, b["text"])
     v = await asyncio.to_thread(rt.vocab_strings)
-    return {"tokens": [[i, v[i]] for i in ids], "vocab": len(rt.tok)}
+    return {"tokens": [[i, v[i]] for i in ids], "vocab": len(rt.tok), "arch": ARCH}
 
 
 @app.post("/api/learn/neighbors")

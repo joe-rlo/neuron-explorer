@@ -96,3 +96,37 @@ def test_ablate_writes_experiment(live):
     with open(os.path.join(ROOT, "experiments", events[-1]["id"] + ".json")) as f:
         rec = json.load(f)
     assert rec["action"] == "ablate" and rec["method"] == "zero" and rec["values"] == [0.0, 0.0] and len(rec["neurons"]) == 2
+
+
+def _events(job):
+    events = []
+    with urllib.request.urlopen(f"{URL}/api/experiment/events?id={job['id']}", timeout=900) as s:
+        for line in s:
+            if line.startswith(b"data: "):
+                events.append(json.loads(line[6:]))
+    assert not [e["error"] for e in events if "error" in e]
+    return events
+
+
+def test_task_logprobs_writes_experiment(live):
+    """A task from tasks/ across three doses: a point per dose with its fitted readout, and a saved experiment."""
+    events = _events(post("/api/experiment/task", {"layer": 22, "n": 2742, "id": "delay_discounting", "doses": [-0.5, 0, 0.5]}))
+    assert any(e.get("scoring") == "logprobs" for e in events)
+    pts = [e["point"] for e in events if "point" in e]
+    assert sorted(p["dose"] for p in pts) == [-0.5, 0, 0.5]
+    assert all(p["measure"]["ci"] and 0 <= p["rate"]["mean"] <= 1 for p in pts)
+    end = events[-1]
+    with open(os.path.join(ROOT, "experiments", end["id"] + ".json")) as f:
+        rec = json.load(f)
+    assert rec["kind"] == "task" and rec["n"] == 42 and set(rec["window"]) == {"positive", "negative"}
+    assert all(len(r["probs"]) == 42 for r in rec["raw"].values())
+
+
+def test_task_multi_token_answers_are_sampled(live):
+    """An inline task whose answers span several tokens falls back to sampling and parsing."""
+    task = {"name": "plans", "kind": "choice", "labels": ["Plan one", "Plan two"], "parameter": "share", "rate": "share",
+            "template": "Two plans.\nPlan one: {A}\nPlan two: {B}\nAnswer with Plan one or Plan two only.",
+            "options": {"x": "stay home", "y": "go hiking"}, "grid": {"k": [1]}, "fit": {"type": "mean"}}
+    events = _events(post("/api/experiment/task", {"layer": 22, "n": 2742, "task": task, "doses": [0, 0.5], "samples": 2}))
+    assert any(e.get("scoring") == "sampled" for e in events)
+    assert sorted(e["point"]["dose"] for e in events if "point" in e) == [0, 0.5]

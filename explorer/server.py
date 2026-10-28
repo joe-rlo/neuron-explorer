@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rank import compute_units  # noqa: E402
 from runtime import CACHE, NO_MODEL, Runtime  # noqa: E402
 import experiment as exm  # noqa: E402
+import tasks as tk  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 NAMES = os.path.join(ROOT, "explorer", "names.json")
@@ -736,6 +737,139 @@ def _run_ablate(job, b, cfg):
         emit(exm.finite({"summary": {"columns": cols, "n": n, "warn": n < cfg["warn_n"], "device": rt.dev,
                                      "reproducible": rt.dev != "mps", "id": eid}}))
         emit({"end": True, "id": eid, "cancelled": False})
+    except Exception as e:
+        emit({"error": repr(e)})
+        emit({"end": True, "cancelled": True})
+    finally:
+        job["done"] = True
+
+
+# ---------- behavioral tasks: paradigms from tasks/*.json, one fitted parameter per dose ----------
+@app.get("/api/tasks")
+def tasks_list():
+    return {"tasks": tk.load()}
+
+
+@app.post("/api/experiment/task")
+async def experiment_task(req: Request):
+    """Starts a task across a dose grid as a background job: every item in both orders (or anchor directions) at every
+    dose, scored from next-token probabilities, and the task's parameter fitted per dose with a bootstrap over items.
+    Body {layer, n, id | task, statements?, doses?}. Progress at /api/experiment/events."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    task = b.get("task") or tk.get(b.get("id", ""))
+    if not task:
+        return {"error": f"no task {b.get('id')!r}"}
+    import uuid
+    cfg = exm.config()
+    job = {"id": uuid.uuid4().hex[:12], "events": [], "cancel": threading.Event(), "done": False}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_task, args=(job, b, task, cfg), daemon=True).start()
+    return {"id": job["id"]}
+
+
+def _task_probs(task, toks, chunk, prompts, layer, neuron, b, cfg):
+    """Label probabilities per (dose, item, order) row: summed over each label's token forms, or, when an answer spans
+    several tokens, the share of `samples` sampled replies that parse to each label."""
+    with rt.lock:
+        push = [rt.push_rows(layer, neuron, "add", [d for d, _, _ in chunk])]
+    msgs = [[{"role": "user", "content": prompts[(j, o)]}] for _, j, o in chunk]
+    if toks:
+        lp = rt.answer_logprobs(push, msgs, [i for ids in toks for i in ids])
+        k, out = 0, []
+        for ids in toks:
+            out.append(np.exp(lp[:, k:k + len(ids)]).sum(1))
+            k += len(ids)
+        return np.stack(out, 1)
+    n, labs = builtins.max(1, int(b.get("samples", cfg["n"]))), tk.labels(task)
+    with rt.lock:
+        push = [rt.push_rows(layer, neuron, "add", [d for d, _, _ in chunk for _ in range(n)])]
+    ids, seed = None, int(b.get("seed", cfg["seed"]))
+    for r, delta in rt.generate(push, [m for m in msgs for _ in range(n)], 12, None, [seed + i for _ in chunk for i in range(n)],
+                                float(b.get("temperature", cfg["temperature"]))):
+        if r is None:
+            ids = delta
+    out = np.zeros((len(chunk), len(labs)))
+    for r, t in enumerate(ids or []):
+        text = rt.tok.decode(t, skip_special_tokens=True)
+        if task["kind"] == "likert":
+            v = tk.parse_likert(text, *task.get("scale", [1, 7]))
+            i = None if v is None else labs.index(str(v))
+        else:
+            i = tk.parse_choice(text, labs)
+        if i is not None:
+            out[r // n, i] += 1 / n
+    return out
+
+
+def _run_task(job, b, task, cfg):
+    import time
+    emit = job["events"].append
+    try:
+        layer, neuron = int(b["layer"]), int(b["n"])
+        items = tk.expand(task, b.get("statements"))
+        if not items:
+            raise ValueError("the task has no items")
+        doses = sorted({float(d) for d in b.get("doses", cfg["sweep_doses"])} | {0.0}, key=lambda d: (abs(d), d))
+        prompts = {(j, o): p for j, it in enumerate(items) for o, p in enumerate(tk.prompts(task, it))}
+        rows = [(d, j, o) for d in doses for j in range(len(items)) for o in (0, 1)]
+        name = task.get("parameter", "parameter")
+        measure = {"name": name, "type": "task"}
+        emit({"start": True, "doses": doses, "items": len(items), "total": len(rows)})
+        rt.ensure_loaded()
+        toks = tk.label_tokens(task, rt.tok)
+        emit({"device": rt.dev, "reproducible": rt.dev != "mps", "scoring": "logprobs" if toks else "sampled"})
+        B, bs = cfg["task_bootstrap"], cfg["bootstrap_seed"]
+        probs, raw, pts, boots = {}, {}, {}, {}
+        t0, per = time.time(), builtins.max(1, cfg["task_batch"] if toks else cfg["max_batch"] // builtins.max(1, int(b.get("samples", cfg["n"]))))
+        for k in range(0, len(rows), per):
+            if job["cancel"].is_set():
+                break
+            chunk = rows[k:k + per]
+            probs.update(zip(chunk, _task_probs(task, toks, chunk, prompts, layer, neuron, b, cfg)))
+            done = k + len(chunk)
+            for d in dict.fromkeys(d for d, _, _ in chunk):
+                if d in raw or not all((d, j, o) in probs for j in range(len(items)) for o in (0, 1)):
+                    continue
+                sc = [tk.score(task, probs[(d, j, 0)], probs[(d, j, 1)]) for j in range(len(items))]
+                vals, valid, bias = [s[0] for s in sc], [s[1] for s in sc], [s[2] for s in sc]
+                f, bo = tk.bootstrap(task, items, vals, B, bs)
+                boots[d] = bo
+                if d == 0:  # the readout: the fitted parameter, or the choice rate when the baseline fit sits at its bound
+                    use = "rate" if f.get("at_bound") and task["kind"] == "choice" and task.get("rate") else "value"
+                    measure = {"name": task["rate"], "type": "contains"} if use == "rate" else {"name": name, "type": "task"}
+                raw[d] = {"values": vals, "measure": vals, "coherence": valid, "script": [0.0] * len(items),
+                          "probs": [[probs[(d, j, o)].tolist() for o in (0, 1)] for j in range(len(items))]}
+                est = {k: {"n": len(items), "mean": f[k], "ci": tk.ci(bo[k])} for k in ("value", "rate")}
+                pt = {"dose": d, "readout": measure["name"], "measure": est[use], "param": est["value"], "rate": est["rate"],
+                      "fit": f, "coherence": exm.summary(valid, cfg["bootstrap"], bs), "script": exm.summary([0.0], 1, bs),
+                      "items": vals, "bias": exm.summary(bias, cfg["bootstrap"], bs)}
+                if d != 0:
+                    pci = tk.ci(bo[use] - boots[0.0][use])
+                    p = {"n": len(items), "diff": f[use] - pts[0.0]["fit"][use], "ci": pci, "d": None}
+                    pt["vs0"] = {**p, "sentence": exm.sentence(f"{d:+g}", measure, p)}
+                    raw[d]["effect_ci"] = pci
+                pts[d] = pt
+                emit(exm.finite({"point": pt}))
+            emit({"progress": {"done": done, "total": len(rows), "eta": round((time.time() - t0) / done * (len(rows) - done), 1)}})
+        cancelled = job["cancel"].is_set()
+        win = exm.window(raw, cfg["toxic"]) if not cancelled and 0.0 in raw and len(raw) > 1 else None
+        eid = _save_experiment("task", {
+            "layer": layer, "neurons": [{"layer": layer, "n": neuron}], "action": "steer", "mode": "add", "doses": doses,
+            "task": task, "statements": b.get("statements"), "items": items, "scoring": "logprobs" if toks else "sampled",
+            "n": len(items), "seeds": None if toks else [int(b.get("seed", cfg["seed"])) + i for i in range(int(b.get("samples", cfg["n"])))],
+            "temperature": None if toks else float(b.get("temperature", cfg["temperature"])), "max_tokens": 1 if toks else 12,
+            "prompt": task["template"], "measures": [measure, "answer validity"], "toxic": cfg["toxic"],
+            "raw": {str(d): r for d, r in raw.items()}, "summary": [pts[d] for d in doses if d in pts], "window": win,
+            "cancelled": cancelled, "prediction": b.get("prediction"), "verdict": None})
+        if win and not b.get("task"):  # a task from tasks/, not one sent inline
+            ws = _read_json(WINDOWS, {})
+            ws.setdefault(f"L{layer}/N{neuron}", {})[f"task: {task['name']} · {measure['name']}"] = {
+                "window": win, "index": exm.best_index(win), "experiment": eid, "prompt": task["name"]}
+            _write_json(WINDOWS, ws)
+        emit(exm.finite({"end": True, "id": eid, "window": win, "index": exm.best_index(win) if win else None,
+                         "readout": measure["name"], "cancelled": cancelled}))
     except Exception as e:
         emit({"error": repr(e)})
         emit({"end": True, "cancelled": True})

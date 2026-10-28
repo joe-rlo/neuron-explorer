@@ -663,6 +663,26 @@ class Runtime:
                 self._push = None
         yield None, out_ids
 
+    def answer_logprobs(self, push, rows_messages, token_ids):
+        """Forward passes only: the log-probabilities of token_ids as the first token of each row's reply (its own
+        message list, left-padded), under `push` (one value per row, as in generate). Returns [rows, len(token_ids)]."""
+        self.ensure_loaded()
+        with self.lock:
+            seqs = [self.messages_ids(m) for m in rows_messages]
+            T = max(map(len, seqs))
+            pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
+            ids = torch.tensor([[pad] * (T - len(q)) + q for q in seqs], device=self.dev)
+            mask = torch.tensor([[0] * (T - len(q)) + [1] * len(q) for q in seqs], device=self.dev)
+            pos = (mask.cumsum(-1) - 1).clamp(min=0)
+            self._push = push or None
+            try:
+                with torch.inference_mode():
+                    out = self.model(input_ids=ids, attention_mask=mask, position_ids=pos, use_cache=False, logits_to_keep=1)
+            finally:
+                self._push = None
+            lp = torch.log_softmax(out.logits[:, -1].float(), -1)
+            return lp[:, torch.tensor(token_ids, device=self.dev)].cpu().numpy()
+
     def reply_logprob(self, rows_messages, replies):
         """Coherence: the mean per-token logprob of each reply (token ids) under the unsteered model, given its own
         conversation. None for an empty reply."""

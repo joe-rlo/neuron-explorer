@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuron Explorer</title>
-<link rel="stylesheet" href="style.css?v=74">
+<link rel="stylesheet" href="style.css?v=75">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%23151515%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%23ffd27a%22/%3E%3C/svg%3E">
 <script type="importmap">
 {"imports": {
@@ -123,6 +123,13 @@
           <label class="xf" title="reply i uses seed + i; the same seed gives the same replies">seed<input id="x-seed" class="mono" inputmode="numeric" value="0" aria-label="base seed"></label>
           <label class="xf" title="ablation: mean sets the neuron to its average activation over web text; zero sets it to 0">ablation<select id="x-method" aria-label="ablation method"><option value="mean">mean</option><option value="zero">zero</option></select></label>
         </div>
+        <div id="x-tasks">
+          <span class="xk">task</span>
+          <select id="x-task" aria-label="behavioral task" title="a decision-making task, run at every dose from −1 to +1; the model answers with one token, so no text is generated"></select><button type="button" id="x-task-how" class="dim" aria-expanded="false" title="what the task measures and how to read its parameter">how it works</button>
+          <span class="xgap"></span>
+          <button type="button" id="x-task-run" title="run every item of the task in both option orders at doses −1 to +1, and fit the task's parameter at each dose">run task</button>
+        </div>
+        <div id="x-task-note" hidden></div>
         <div id="x-editor" hidden></div>
         <div id="x-set" hidden></div>
         <div class="row"><input id="c-input" placeholder="Who are you?" autocomplete="off"><button id="c-go" type="submit">run</button></div>
@@ -143,6 +150,6 @@
   </aside>
 </main>
 <div id="tour" hidden><div id="tour-ring"></div><div id="tour-card" role="dialog" aria-label="tour"></div></div>
-<script type="module" src="app.js?v=136"></script>
+<script type="module" src="app.js?v=140"></script>
 </body>
 </html>

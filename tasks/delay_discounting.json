@@ -1,0 +1,22 @@
+{
+  "name": "delay discounting",
+  "kind": "choice",
+  "parameter": "log₁₀ k",
+  "rate": "share choosing to wait",
+  "template": "Suppose you are offered a choice between two payments.\nA: {A}\nB: {B}\nWhich payment do you take? Answer with the letter A or B only.",
+  "options": {"x": "${now} today", "y": "${later} {delay}"},
+  "grid": {
+    "now": [10, 25, 40, 55, 70, 85, 95],
+    "later": [100],
+    "delay": [
+      {"delay": "tomorrow", "days": 1},
+      {"delay": "in a week", "days": 7},
+      {"delay": "in a month", "days": 30},
+      {"delay": "in three months", "days": 91},
+      {"delay": "in six months", "days": 182},
+      {"delay": "in a year", "days": 365}
+    ]
+  },
+  "fit": {"type": "hyperbolic", "now": "now", "later": "later", "delay": "days"},
+  "method": "Each item offers a smaller amount today against $100 after a delay, from tomorrow to a year. A future reward is worth less the longer you wait for it; the hyperbolic model V = A / (1 + kD) says how fast, with k the discount rate per day. The fit finds the k that best predicts the model's preference for waiting at every amount and delay. Higher log₁₀ k means more impatient: at log₁₀ k = −2, $100 in 100 days is worth $50 today; at −3 it is still worth about $91. A neuron that raises log₁₀ k makes the model take the money now more often. If the choices barely depend on the amounts, the fit runs to the edge of its range and the share choosing to wait is the better read."
+}

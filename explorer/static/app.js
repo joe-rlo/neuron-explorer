@@ -870,6 +870,7 @@ async function loadExperiments() {
   $("#x-n").value = X.cfg.n; $("#x-temp").value = X.cfg.temperature; $("#x-max").value = X.cfg.max_new; $("#x-seed").value = X.cfg.seed;
   let saved = null; try { saved = localStorage.getItem("ne.measure"); } catch {}
   X.pick = saved ?? LENS_MEASURE; renderMeasures();
+  loadTasks();
 }
 // the open neuron's own lens as a measure: word starts of its top steer-lens tokens (logit lens without a steer
 // index), so a reply counts words like the ones this neuron pushes toward
@@ -954,9 +955,11 @@ $("#x-edit").onclick = () => { const ed = $("#x-editor"); ed.hidden = !ed.hidden
 
 function renderThread() {
   const el = $("#c-thread");
-  el.innerHTML = state.thread.map((t, i) => t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i)).join("");
+  el.innerHTML = state.thread.map(entryHTML).join("");
   el.scrollTop = el.scrollHeight;
 }
+const entryHTML = (t, i) => t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>`
+  : t.kind === "task" ? `<div class="turn sweep task" data-i="${i}">${taskHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i);
 const COL_TIPS = ["pushed up by +dose", "unsteered: the baseline the other two are compared with", "pushed down by −dose"];
 function turnHTML(t, i) {
   const S = t.summary, labs = turnLabels(t), m = t.measure;
@@ -997,7 +1000,7 @@ $("#c-thread").addEventListener("click", e => {
 });
 function renderTurn(t) {
   const i = state.thread.indexOf(t), el = $(`#c-thread .turn[data-i="${i}"]`);
-  if (el) el.outerHTML = t.kind === "sweep" ? `<div class="turn sweep" data-i="${i}">${sweepHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i);
+  if (el) el.outerHTML = entryHTML(t, i);
 }
 $("#c-clear").onclick = () => { if (running) running.abort(); if (X.job) api("/api/experiment/cancel", { id: X.job.id }).catch(() => {}); state.thread = []; renderThread(); };
 let reading = false;
@@ -1111,19 +1114,20 @@ function sweepHTML(t) {
 const WINDOW_TIP = "ED (effective dose): the smallest dose whose change in the measure has a 95% interval that excludes zero. "
   + "TD (toxic dose): the smallest dose whose coherence falls below the dashed line, or whose replies switch writing system. "
   + "window = TD − ED; index = TD / ED: higher means the neuron moves the measure well before it breaks the text.";
-function windowHTML(w, name) {
-  return `<div class="xwin"><div class="lab" title="${WINDOW_TIP}">therapeutic window · ${esc(name)} <span class="q">?</span></div>${["positive", "negative"].map(k => windowLine(k, w[k], name)).join("")}</div>`;
+// task windows pass a title (task · readout) and say "answers" where a sweep says "text"
+function windowHTML(w, name, title = name, what = "text") {
+  return `<div class="xwin"><div class="lab" title="${WINDOW_TIP}">therapeutic window · ${esc(title)} <span class="q">?</span></div>${["positive", "negative"].map(k => windowLine(k, w[k], name, what)).join("")}</div>`;
 }
-function windowLine(k, r, name) {
+function windowLine(k, r, name, what = "text") {
   const s = k === "positive" ? "+" : "−", cls = k === "positive" ? "up" : "down";
   if (!r) return "";
   if (r.ed == null) return `<div><span class="sgn ${cls}">${s}</span><span class="dim">no dose up to ${s}${r.max_dose} changed ${esc(name)}</span></div>`;
-  const brk = r.td == null ? `text still coherent at ${s}${r.max_dose}` : `text breaks at ${s}${r.td} (TD)`;
+  const brk = r.td == null ? `${what} still ${what === "text" ? "coherent" : "valid"} at ${s}${r.max_dose}` : `${what} break${what === "text" ? "s" : ""} at ${s}${r.td} (TD)`;
   return `<div><span class="sgn ${cls}">${s}</span>moves from ${s}${r.ed} (ED) · ${brk}${r.index != null ? ` · index ${num(r.index)}` : ""}</div>`;
 }
 // measure (top) and coherence (bottom) against dose: mean with its 95% interval at each dose; the dashed line is
 // the toxic threshold (dose 0's coherence minus the configured drop)
-function sweepPlot(t) {
+function sweepPlot(t, lab = {}) {
   const W = 560, L = 46, R = 12, ds = t.doses, x0 = Math.min(...ds), x1 = Math.max(...ds);
   const X_ = d => L + (d - x0) / ((x1 - x0) || 1) * (W - L - R);
   const pts = ds.map(d => t.points[d]).filter(Boolean);
@@ -1150,16 +1154,18 @@ function sweepPlot(t) {
     + `<text class="pl" x="${(L + W - R) / 2}" y="${H - 4}" text-anchor="middle">dose (− pushes down · 0 unsteered · + pushes up)</text>`;
   const flat = pts.length > 1 && pts.every(q => q.measure.mean === 0 && !q.measure.sd);
   return `<svg class="xplot" viewBox="0 0 ${W} ${H}" role="img" aria-label="dose-response for ${esc(t.measure.name)} and coherence">`
-    + panel("measure", top, h1, `${t.measure.name} · ${({ words: "hits per 100 words", contains: "share of replies", regex: "matches per reply" })[t.measure.type] || ""}${flat ? " · zero at every dose so far" : ""}`)
-    + panel("coherence", top + h1 + gap, h2, "coherence · higher reads more naturally", thr != null ? [thr] : [])
-    + ticks + `</svg><div class="xnote dim xlegend">dots: mean of the replies at each dose · bars: 95% interval${thr != null ? ` · <span class="thr-key">dashed</span>: coherence ${X.cfg.toxic.coherence_drop} below the unsteered column, where text counts as broken` : ""}</div>`;
+    + panel("measure", top, h1, lab.top || `${t.measure.name} · ${({ words: "hits per 100 words", contains: "share of replies", regex: "matches per reply" })[t.measure.type] || ""}${flat ? " · zero at every dose so far" : ""}`)
+    + panel("coherence", top + h1 + gap, h2, lab.bottom || "coherence · higher reads more naturally", thr != null ? [thr] : [])
+    + ticks + `</svg><div class="xnote dim xlegend">${lab.dots || "dots: mean of the replies at each dose · bars: 95% interval"}${thr != null ? ` · <span class="thr-key">dashed</span>: ${lab.thr || `coherence ${X.cfg.toxic.coherence_drop} below the unsteered column, where text counts as broken`}` : ""}</div>`;
 }
 
 // the open neuron's therapeutic window for the chosen measure, on its Details tab
 function renderWindow() {
   const el = $("#d-window"), f = state.focus; if (!el || !f) return;
   const m = currentMeasure(), w = m && windowOf(f.layer, f.n, m.name);
-  el.innerHTML = w ? `${windowHTML(w.window, m.name)}<div class="xnote dim">from a dose sweep on “${esc(w.prompt)}”</div>` : "";
+  const tasks = Object.entries(X.windows[`L${f.layer}/N${f.n}`] || {}).filter(([k]) => k.startsWith("task: "));
+  el.innerHTML = (w ? `${windowHTML(w.window, m.name)}<div class="xnote dim">from a dose sweep on “${esc(w.prompt)}”</div>` : "")
+    + tasks.map(([k, v]) => `${windowHTML(v.window, k.split(" · ").slice(1).join(" · "), k.slice(6), "answers")}<div class="xnote dim">from the ${esc(v.prompt)} task</div>`).join("");
   renderLesionCard();
 }
 // steering and ablation side by side on the neuron card: steering tests sufficiency, ablation necessity
@@ -1173,6 +1179,93 @@ async function renderLesionCard() {
   el.innerHTML = `<div class="lab">steering vs ablation · ${esc(m.name)}</div><div class="lcard">`
     + cell("steer", "steering · is it sufficient?", "pushing the neuron: does that alone move the measure?", x.steer, v => `${v.mode === "mul" ? "×" : "add"} ${v.dose}`)
     + cell("ablate", "ablation · is it necessary?", "removing the neuron: does the measure depend on it?", x.ablate, v => `${v.method} ablation${v.set > 1 ? ` of a set of ${v.set}` : ""}`) + `</div>`;
+}
+
+// ---------- behavioral tasks: a paradigm from tasks/, run at every dose, one fitted parameter per dose ----------
+X.tasks = [];
+const curTask = () => X.tasks.find(k => k.id === $("#x-task").value) || null;
+async function loadTasks() {
+  try { X.tasks = (await api("/api/tasks")).tasks; } catch { return; }
+  let saved = null; try { saved = localStorage.getItem("ne.task"); } catch {}
+  $("#x-task").innerHTML = X.tasks.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join("");
+  if (X.tasks.some(k => k.id === saved)) $("#x-task").value = saved;
+  renderTaskNote();
+}
+let likert = {}; try { likert = JSON.parse(localStorage.getItem("ne.likert") || "{}"); } catch {}
+const statementsOf = k => likert[k.id] || k.grid.statement;
+// the methods note, and for a Likert task its statements (one per line, kept in this browser)
+function renderTaskNote() {
+  const k = curTask(), el = $("#x-task-note"), open = $("#x-task-how").getAttribute("aria-expanded") === "true";
+  el.hidden = !k || (!open && k.kind !== "likert");
+  if (el.hidden) return;
+  el.innerHTML = (open ? `<p class="method">${esc(k.method)}</p>` : "")
+    + (k.kind === "likert" ? `<label class="xk" for="x-statements">statements, one per line</label><textarea id="x-statements" rows="5" spellcheck="false">${esc(statementsOf(k).join("\n"))}</textarea>` : "");
+}
+$("#x-task").onchange = () => { try { localStorage.setItem("ne.task", $("#x-task").value); } catch {} renderTaskNote(); };
+$("#x-task-how").onclick = () => {
+  const b = $("#x-task-how"); b.setAttribute("aria-expanded", String(b.getAttribute("aria-expanded") !== "true")); renderTaskNote();
+};
+$("#x-task-note").addEventListener("input", e => {
+  if (e.target.id !== "x-statements") return;
+  likert[curTask().id] = e.target.value.split("\n").map(s => s.trim()).filter(Boolean);
+  try { localStorage.setItem("ne.likert", JSON.stringify(likert)); } catch {}
+});
+async function runTask() {
+  const f = state.focus, k = curTask(); if (!f || f.kind !== "neuron" || !X.cfg || !k) return;
+  if (X.job) { $("#status").textContent = "a run is already going"; return; }
+  const statements = k.kind === "likert" ? statementsOf(k) : null;
+  if (statements && !statements.length) { $("#status").textContent = "write at least one statement to rate"; return; }
+  const doses = X.cfg.sweep_doses;
+  const t = { kind: "task", task: k, layer: f.layer, neuron: f.n, doses: [...new Set([...doses, 0])].sort((a, b) => a - b),
+              measure: { name: k.parameter, type: "task" }, points: {}, live: true, progress: null };
+  state.thread.push(t); renderThread();
+  let r;
+  try { r = await api("/api/experiment/task", { layer: f.layer, n: f.n, id: k.id, doses, ...(statements ? { statements } : {}) }); }
+  catch (err) { r = { error: err.message }; }
+  if (r.error) { t.error = r.error; t.live = false; renderTurn(t); return; }
+  X.job = { id: r.id, t };
+  try {
+    await sse(await fetch(`/api/experiment/events?id=${r.id}`), ev => {
+      if (ev.error) t.error = ev.error;
+      if (ev.start) t.items = ev.items;
+      if (ev.scoring) Object.assign(t, { scoring: ev.scoring, device: ev.device, reproducible: ev.reproducible });
+      if (ev.point) { t.points[ev.point.dose] = ev.point; t.readout = ev.point.readout; }
+      if (ev.progress) t.progress = ev.progress;
+      if (ev.end) Object.assign(t, { live: false, window: ev.window, expId: ev.id, cancelled: ev.cancelled });
+      const th = $("#c-thread"), near = th.scrollHeight - th.scrollTop - th.clientHeight < 80;
+      renderTurn(t); if (near) th.scrollTop = th.scrollHeight;
+    });
+  } catch (err) { t.error = String(err); }
+  finally {
+    X.job = null; t.live = false; renderTurn(t);
+    try { X.windows = await api("/api/experiment/windows"); } catch {}
+    renderWindow();
+  }
+}
+$("#x-task-run").onclick = runTask;
+const pct = v => v == null ? "—" : `${Math.round(v * 100)}%`;
+function taskHTML(t) {
+  const k = t.task, p = t.progress, z = t.points[0], likertTask = k.kind === "likert";
+  const head = `<div class="user sweep-head">task · ${esc(k.name)} · ${esc(k.parameter)}${t.items ? ` · ${t.items} items, each in both ${likertTask ? "scale directions" : "option orders"}` : ""}<span class="recipe">L${t.layer} N${t.neuron} · ${t.scoring === "sampled" ? "answers sampled and parsed" : "scored from next-token probabilities, no text generated"}</span></div>`;
+  const prog = t.live ? `<div class="xnote dim">${p ? `${p.done}/${p.total} prompts · about ${Math.round(p.eta)} s left` : "starting…"} · <button type="button" class="x-cancel">cancel</button></div>`
+    : t.cancelled ? `<div class="xnote dim">cancelled${t.expId ? " · partial results saved" : ""}</div>` : "";
+  // the readout is the fitted parameter, unless the baseline fit sat at the edge of its range: then the choice rate
+  const byRate = t.readout && t.readout !== k.parameter, name = byRate ? t.readout : k.parameter;
+  const plot = sweepPlot(t, { top: byRate ? `${name} · at each dose` : `${name} · fitted at each dose`, bottom: "answer validity · log of the probability on valid answers",
+    thr: "validity 1.0 below dose 0, where the model has stopped answering the question",
+    dots: "dots: the value at each dose · bars: 95% interval from resampling the items" });
+  // the baseline's own order effect: every item runs both ways, so it cancels out of the parameter, but it is worth knowing
+  const bias = z?.bias?.mean == null ? "" : `<div class="xnote dim">${likertTask
+    ? `At dose 0 the average digit picked sits ${sgn(z.bias.mean)} from the scale's midpoint whichever end means agree (0 is no number bias); the two directions cancel it out of the rating.`
+    : `At dose 0 the model picks whichever option is listed first ${pct(z.bias.mean)} of the time (50% is no position bias); every item runs in both orders, so this cancels out of the parameter.`}</div>`;
+  const edge = byRate ? `<div class="xnote warn">At dose 0 the ${esc(k.parameter)} fit ran to the edge of its range: the model's choices barely depend on the amounts, so the fitted value means little. This run reads ${esc(name)} instead.</div>`
+    : Object.values(t.points).some(q => q.fit?.at_bound) ? `<div class="xnote warn">The ${esc(k.parameter)} fit sits at the edge of its range at some doses, where the choices barely depend on the amounts.</div>` : "";
+  const lines = Object.values(t.points).sort((a, b) => a.dose - b.dose).map(q =>
+    `<div class="xline">${fmtDose(q.dose)}: ${esc(k.parameter)} ${num(q.param.mean)} ${ivl(q.param.ci)}${k.rate ? ` · ${esc(k.rate)} ${pct(q.rate.mean)} [${pct(q.rate.ci[0])}, ${pct(q.rate.ci[1])}]` : ""}${q.vs0 ? `<span class="dim"> · ${esc(q.vs0.sentence)}</span>` : ""}</div>`).join("");
+  const repro = t.reproducible === false ? `<div class="xnote dim">Running on ${esc(t.device)}: the same inputs may give slightly different probabilities elsewhere.</div>` : "";
+  return head + prog + plot + (t.window ? windowHTML(t.window, name, name, "answers") : "") + edge + bias + (t.error ? `<div class="err">${esc(t.error)}</div>` : "")
+    + (lines ? `<details class="xsent"><summary class="dim">each dose</summary>${lines}</details>` : "")
+    + `<details class="xsent"><summary class="dim">how to read this</summary><div class="xline method">${esc(k.method)}</div></details>` + repro;
 }
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------

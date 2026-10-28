@@ -131,14 +131,15 @@ def sentence(label, measure, p, versus="no steering"):
         return f"{label}: no scores to compare."
     name, u = measure.get("name", "the measure"), unit(measure)
     diff, ci = p["diff"], p["ci"]
-    if measure["type"] == "contains":  # a rate: report percentage points
-        size = f"{abs(diff) * 100:.0f} percentage points"
-        cis = f" (95% CI {ci[0] * 100:.0f} to {ci[1] * 100:.0f})" if ci else ""
+    if measure["type"] == "contains":  # a rate: report percentage points, with a decimal under 10
+        pp = lambda v: (f"{v * 100:.1f}" if abs(v) < 0.1 else f"{v * 100:.0f}").replace("-0.0", "0.0")
+        size = f"{pp(abs(diff))} percentage points"
+        cis = f" (95% CI {pp(ci[0])} to {pp(ci[1])})" if ci else ""
     else:
         size = f"{_num(abs(diff))}{' ' + u if u else ''}"
         cis = f" (95% CI {_num(ci[0])} to {_num(ci[1])})" if ci else ""
-    if diff == 0 and (ci is None or ci == [0.0, 0.0]):
-        return f"{label} left {name} unchanged versus {versus}."
+    if diff == 0:
+        return f"{label} left {name} unchanged{cis} versus {versus}."
     verb = "raised" if diff > 0 else "lowered"
     tail = "" if excludes_zero(ci) else f"; the interval includes zero, so this is not distinguishable from {versus}"
     return f"{label} {verb} {name} by {size}{cis} versus {versus}{tail}."
@@ -151,7 +152,8 @@ def window(points, toxic):
     points: {dose: {"measure": [per-sample], "coherence": [...], "script": [...]}} with dose 0 present; samples
     paired by index. toxic: {"coherence_drop", "script_mix"}. ED = the smallest |dose| whose paired measure
     difference from dose 0 has a 95% interval excluding zero; TD = the smallest |dose| whose mean coherence falls
-    more than coherence_drop below dose 0's, or whose mean script mix exceeds script_mix."""
+    more than coherence_drop below dose 0's, or whose mean script mix exceeds script_mix. A point may carry its own
+    "effect_ci" (a task's fitted parameter against dose 0) to use instead of the paired measure difference."""
     base = points[0]
     base_coh = summary(base["coherence"])["mean"]
     top = max(abs(d) for d in points)
@@ -161,7 +163,8 @@ def window(points, toxic):
         ed = td = None
         for d in doses:
             p = points[d]
-            if ed is None and excludes_zero(paired(p["measure"], base["measure"])["ci"]):
+            ci = p["effect_ci"] if "effect_ci" in p else paired(p["measure"], base["measure"])["ci"]
+            if ed is None and excludes_zero(ci):
                 ed = abs(d)
             coh, mix = summary(p["coherence"])["mean"], summary(p["script"])["mean"]
             if td is None and ((coh is not None and base_coh is not None and coh < base_coh - toxic["coherence_drop"])

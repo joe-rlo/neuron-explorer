@@ -360,7 +360,16 @@ tr.con .logit .tok { font-size: 10.5px; }
 #x-controls .xgap { flex: 1; }
 #x-more { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 0 calc(4.6em + 10px); }
 #x-more[hidden] { display: none; }
-#tab-chat.reads #x-controls, #tab-chat.reads #x-more, #tab-chat.reads #x-editor { display: none; }
+#tab-chat.reads #x-controls, #tab-chat.reads #x-more, #tab-chat.reads #x-editor, #tab-chat.reads #x-tasks, #tab-chat.reads #x-task-note { display: none; }
+#x-tasks { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#x-tasks select { padding: 3px 6px; font-size: 12px; max-width: 14em; }
+#x-tasks > button { font-size: 12px; }
+#x-tasks .xgap { flex: 1; }
+#x-task-run { background: var(--raise); padding: 3px 10px; border-radius: 4px; }
+#x-task-note { margin: 8px 0 0 calc(4.6em + 10px); display: grid; gap: 6px; }
+#x-task-note[hidden] { display: none; }
+#x-task-note .method, .xline.method { font-size: 12px; line-height: 1.5; color: var(--dim); margin: 0; }
+#x-task-note textarea { width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.3); border: 0; border-radius: 4px; padding: 6px 8px; color: inherit; font: 12px var(--mono); resize: vertical; }
 .xs { font: 11px/1.5 var(--mono); font-variant-numeric: tabular-nums; white-space: normal; margin-bottom: 8px; color: var(--ink); }
 .xs > div { display: grid; grid-template-columns: minmax(0, 6.2em) 1fr; gap: 6px; }
 .xs .k { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

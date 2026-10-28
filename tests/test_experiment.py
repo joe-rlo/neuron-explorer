@@ -90,6 +90,8 @@ def test_sentence():
     s = ex.sentence("−0.5", PIZZA, {"diff": -0.25, "ci": [-0.5, 0.1], "d": -0.4})
     assert s.startswith("−0.5 lowered mentions pizza by 25 percentage points (95% CI -50 to 10)")
     assert "not distinguishable" in s
+    s = ex.sentence("+1", PIZZA, {"diff": 0.004, "ci": [-0.0004, 0.012], "d": None})
+    assert s.startswith("+1 raised mentions pizza by 0.4 percentage points (95% CI 0.0 to 1.2)")
 
 
 # ---------- dose-response ----------

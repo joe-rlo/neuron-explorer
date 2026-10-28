@@ -12,6 +12,8 @@
   "toxic": {"coherence_drop": 1.0, "script_mix": 0.2},
   "ablation": "mean",
   "mean_tokens": 10000,
+  "task_batch": 32,
+  "task_bootstrap": 500,
   "stimuli": [
     {"name": "food vs non-food", "template": "Let's talk about {item}.", "items": [
       {"text": "pizza", "category": "food"}, {"text": "burger", "category": "food"}, {"text": "sushi", "category": "food"},

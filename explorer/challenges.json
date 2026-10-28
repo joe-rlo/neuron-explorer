@@ -1,0 +1,17 @@
+[
+  {"id": "pizza-breakfast", "name": "Pizza for breakfast", "goal": "Get pizza into at least half the answers to a breakfast question.",
+   "prompt": "What should I eat for breakfast tomorrow?", "measure": {"name": "mentions pizza", "type": "contains", "word": "pizza"},
+   "op": ">=", "target": 0.5, "minimize": "dose"},
+  {"id": "alien-forecast", "name": "Visitors in the forecast", "goal": "Make a weather forecast talk about aliens: at least 1.5 alien words per 100 words.",
+   "prompt": "Write a two-sentence weather forecast for tomorrow.", "measure": {"name": "alien words", "type": "words", "words": ["alien", "ufo", "extraterrestrial", "spaceship", "martian"], "stems": true},
+   "op": ">=", "target": 1.5, "minimize": "dose"},
+  {"id": "ocean-interview", "name": "Interview at sea", "goal": "Steer job interview advice toward the sea: at least 2 sea words per 100 words.",
+   "prompt": "Give me three tips for a job interview.", "measure": {"name": "sea words", "type": "words", "words": ["ocean", "sea", "seas", "wave", "waves", "beach", "tide", "sailor", "ship", "boat"]},
+   "op": ">=", "target": 2, "minimize": "neurons"},
+  {"id": "no-sorry", "name": "No apologies", "goal": "Answer a complaint without apologizing: fewer than one apology in five replies.",
+   "prompt": "You got my order wrong again.", "measure": {"name": "apologies", "type": "regex", "pattern": "(?i)\\b(sorry|apologi[sz]e|apologies)\\b"},
+   "op": "<=", "target": 0.2, "minimize": "dose", "max_new": 80},
+  {"id": "cat-fractions", "name": "Fractions with cats", "goal": "Bring cats into a math explanation: at least 1 cat word per 100 words.",
+   "prompt": "Explain how to add two fractions.", "measure": {"name": "cat words", "type": "words", "words": ["cat", "cats", "kitten", "kittens", "feline"]},
+   "op": ">=", "target": 1, "minimize": "neurons"}
+]

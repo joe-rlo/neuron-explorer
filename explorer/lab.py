@@ -1,6 +1,6 @@
 """Lab: the records and games built on experiment mode. The notebook's one-line view of each saved experiment (what
-was run, its result and the prediction made before it) and blind rating's binomial test. Pure python; storage and the
-model are in server.py.
+was run, its result and the prediction made before it), blind rating's binomial test and challenge scoring. Pure
+python; storage and the model are in server.py.
 """
 import math
 import re
@@ -96,3 +96,41 @@ def blind_summary(trials):
     for t in trials:
         props.setdefault(t["property"].strip().lower(), []).append(t)
     return {**blind_stats(trials), "by_property": {k: blind_stats(v) for k, v in props.items()}}
+
+
+# ---------- challenges ----------
+def _value(measure, v):
+    if measure["type"] == "contains":
+        return f"{v:.0%} of replies"
+    if measure["type"] == "words":
+        return f"{v:.2g} per 100 words"
+    return f"{v:.2g} per reply"
+
+
+def challenge_result(ch, scores, coh_base, coh, script, toxic):
+    """Scores one attempt: the steered replies' mean measure against the goal (ch["op"] ch["target"]), and their
+    coherence against the unsteered replies of the same seeds. It counts only if the goal is met and the text stays
+    under the Phase 1 toxic thresholds (mean coherence no more than coherence_drop below unsteered, script mix no
+    more than script_mix)."""
+    mean = lambda x: sum(x) / len(x) if x else 0.0
+    value, drop, mix = mean(scores), mean(coh_base) - mean(coh), mean(script)
+    met = value >= ch["target"] if ch["op"] == ">=" else value <= ch["target"]
+    coherent = drop <= toxic["coherence_drop"] and mix <= toxic["script_mix"]
+    m = ch["measure"]
+    got = f"{m['name']}: {_value(m, value)} (goal {'≥' if ch['op'] == '>=' else '≤'} {_value(m, ch['target'])})"
+    why = "Passed" if met and coherent else "Missed the goal" if not met else "Goal met, but the text broke"
+    tail = f"coherence {abs(drop):.2f} {'below' if drop > 0.005 else 'above' if drop < -0.005 else 'from'} unsteered (limit {toxic['coherence_drop']:g} below)" + (
+        f", {mix:.0%} other script (limit {toxic['script_mix']:.0%})" if mix > 0.01 else "")
+    return {"value": value, "met": met, "coherence_drop": drop, "script": mix, "coherent": coherent,
+            "passed": met and coherent, "sentence": f"{why}. {got}; {tail}."}
+
+
+def rank_key(ch, a):
+    """Lower is better: the smallest |dose| (then fewest neurons), or the fewest neurons (then the smallest |dose|)."""
+    k, d = len(a["neurons"]), abs(a["dose"])
+    return (k, d) if ch.get("minimize") == "neurons" else (d, k)
+
+
+def best(ch, attempts, k=5):
+    """The k best passing attempts at a challenge."""
+    return sorted((a for a in attempts if a["challenge"] == ch["id"] and a["passed"]), key=lambda a: rank_key(ch, a))[:k]

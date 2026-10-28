@@ -480,3 +480,19 @@ tr.con .logit .tok { font-size: 10.5px; }
 .blind-q button:disabled { opacity: 0.4; cursor: default; }
 .blind-res { font-size: 12.5px; margin-top: 10px; }
 .blind-res .hit { color: #8be0a4; } .blind-res .miss { color: var(--down); }
+
+/* challenges */
+.ch { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ch-head { font-size: 13.5px; }
+.ch-head .dim { font-size: 12px; }
+.ch .recipe { font-size: 11px; margin-top: 4px; }
+.ch-best { margin-top: 8px; font-size: 12px; }
+.ch-best th { font: 11px var(--mono); color: var(--faint); text-align: right; font-weight: normal; }
+.ch-best td:first-child { color: var(--faint); }
+.ch-try { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+.ch-try .ch-dose { width: 4.5em; margin-left: 6px; }
+.ch-try button { font-size: 12px; background: var(--raise); padding: 3px 12px; border-radius: 4px; }
+.ch-try button:disabled { opacity: 0.4; cursor: default; }
+.xline.pass { color: #8be0a4; } .xline.fail { color: var(--dim); }
+.ch-reply { font-size: 12px; white-space: pre-wrap; padding: 6px 0 6px 10px; box-shadow: inset 2px 0 0 var(--faint); margin-top: 6px; }
+.warn { color: var(--up); }

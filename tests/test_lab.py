@@ -58,3 +58,29 @@ def test_blind_stats_counts_hits_against_target():
     assert list(s["by_property"]) == ["aliens"]  # properties group without case or spaces
     few = lab.blind_stats([trial("x", "up", "up")] * 2)
     assert "too few" in few["sentence"] and lab.blind_stats([])["accuracy"] is None
+
+
+# ---------- challenges ----------
+CH = {"id": "c", "measure": {"name": "mentions pizza", "type": "contains", "word": "pizza"}, "op": ">=", "target": 0.5, "minimize": "dose"}
+TOX = {"coherence_drop": 1.0, "script_mix": 0.2}
+
+
+def test_challenge_passes_only_when_goal_met_and_coherent():
+    ok = lab.challenge_result(CH, [1, 1, 0, 1], [-0.5] * 4, [-1.0] * 4, [0] * 4, TOX)
+    assert ok["passed"] and ok["value"] == 0.75 and abs(ok["coherence_drop"] - 0.5) < 1e-12
+    assert ok["sentence"].startswith("Passed. mentions pizza: 75% of replies (goal ≥ 50% of replies)")
+    broke = lab.challenge_result(CH, [1, 1, 1, 1], [-0.5] * 4, [-2.0] * 4, [0] * 4, TOX)
+    assert broke["met"] and not broke["passed"] and "text broke" in broke["sentence"]
+    script = lab.challenge_result(CH, [1] * 4, [-0.5] * 4, [-0.6] * 4, [0.5] * 4, TOX)
+    assert not script["coherent"] and "other script" in script["sentence"]
+    low = lab.challenge_result({**CH, "op": "<=", "target": 0.2}, [0, 0, 1, 0, 0, 0], [-0.5] * 6, [-0.5] * 6, [0] * 6, TOX)
+    assert low["passed"]  # 1 in 6 is under 0.2
+
+
+def test_best_orders_by_the_challenges_constraint():
+    a = [{"challenge": "c", "passed": True, "dose": 0.6, "neurons": [1]},
+         {"challenge": "c", "passed": True, "dose": -0.3, "neurons": [1, 2, 3]},
+         {"challenge": "c", "passed": False, "dose": 0.1, "neurons": [1]},
+         {"challenge": "other", "passed": True, "dose": 0.05, "neurons": [1]}]
+    assert [x["dose"] for x in lab.best(CH, a)] == [-0.3, 0.6]
+    assert [x["dose"] for x in lab.best({**CH, "minimize": "neurons"}, a)] == [0.6, -0.3]

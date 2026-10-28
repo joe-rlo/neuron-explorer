@@ -977,6 +977,106 @@ async def blind_trial(req: Request):
     return lab.blind_summary(_blind_trials(layer, n))
 
 
+# ---------- challenges: a goal, a measure and a constraint (smallest |dose| or fewest neurons), with a best table ----------
+CHALLENGES = os.path.join(ROOT, "explorer", "challenges.json")
+CHALLENGE_LOG = os.path.join(EXPERIMENTS, "challenges.json")
+
+
+def _challenges():
+    return _read_json(CHALLENGES, [])
+
+
+@app.get("/api/challenges")
+def challenges():
+    attempts = _read_json(CHALLENGE_LOG, {"attempts": []})["attempts"]
+    return {"challenges": [{**ch, "best": lab.best(ch, attempts), "tries": sum(a["challenge"] == ch["id"] for a in attempts)}
+                           for ch in _challenges()], "toxic": exm.config()["toxic"]}
+
+
+@app.post("/api/challenge/attempt")
+async def challenge_attempt(req: Request):
+    """Starts an attempt as a background job: the challenge's prompt `samples` times unsteered and `samples` times
+    with every neuron in `neurons` pushed (add) by `dose`, paired by seed. Progress at /api/experiment/events."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    ch = next((c for c in _challenges() if c["id"] == b.get("id")), None)
+    if ch is None:
+        return JSONResponse({"error": "no such challenge"}, status_code=404)
+    if not b.get("neurons") or not float(b.get("dose", 0)):
+        return JSONResponse({"error": "an attempt needs at least one neuron and a dose other than 0"}, status_code=400)
+    import uuid
+    cfg = exm.config()
+    job = {"id": uuid.uuid4().hex[:12], "events": [], "cancel": threading.Event(), "done": False}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_challenge, args=(job, b, ch, cfg), daemon=True).start()
+    return {"id": job["id"]}
+
+
+def _run_challenge(job, b, ch, cfg):
+    import datetime
+    import time
+    emit = job["events"].append
+    try:
+        neurons = [{"layer": int(x["layer"]), "n": int(x["n"])} for x in b["neurons"]]
+        dose, measure, prompt = float(b["dose"]), ch["measure"], ch["prompt"]
+        n = builtins.max(1, builtins.min(32, int(b.get("samples", cfg["n"]))))
+        temp, seed, max_new = float(b.get("temperature", cfg["temperature"])), int(b.get("seed", cfg["seed"])), \
+            int(ch.get("max_new", cfg["quick"]["max_new"] + 40))
+        rows = [(c, i) for c in (0, 1) for i in range(n)]
+        emit({"start": True, "n": n, "total": len(rows)})
+        rt.ensure_loaded()
+        msgs = [{"role": "user", "content": prompt}]
+        texts, coh = {}, {}
+        t0, per = time.time(), builtins.max(1, cfg["max_batch"])
+        for k in range(0, len(rows), per):
+            if job["cancel"].is_set():
+                break
+            chunk = rows[k:k + per]
+            with rt.lock:
+                push = [rt.push_rows(x["layer"], x["n"], "add", [dose * c for c, _ in chunk]) for x in neurons]
+            ids, text = None, {x: "" for x in chunk}
+            for r, delta in rt.generate(push, [msgs] * len(chunk), max_new, job["cancel"], [seed + i for _, i in chunk], temp):
+                if r is None:
+                    ids = delta
+                else:
+                    text[chunk[r]] += delta
+            if job["cancel"].is_set() or ids is None:
+                break
+            texts.update(text)
+            coh.update(zip(chunk, rt.reply_logprob([msgs] * len(chunk), ids)))
+            done = k + len(chunk)
+            emit({"progress": {"done": done, "total": len(rows), "eta": round((time.time() - t0) / done * (len(rows) - done), 1)}})
+        if job["cancel"].is_set() or len(texts) < len(rows):
+            emit({"end": True, "cancelled": True})
+            return
+        raw = []
+        for c, lab_ in enumerate(("unsteered", "steered")):
+            t = [texts[(c, i)] for i in range(n)]
+            m, sm = _scores(t, prompt, measure)
+            raw.append({"label": lab_, "texts": t, "measure": m, "coherence": [coh[(c, i)] for i in range(n)], "script": sm})
+        res = lab.challenge_result(ch, raw[1]["measure"], raw[0]["coherence"], raw[1]["coherence"], raw[1]["script"], cfg["toxic"])
+        res["baseline"] = sum(raw[0]["measure"]) / n
+        eid = _save_experiment("challenge", {
+            "layer": neurons[0]["layer"], "neurons": neurons, "action": "steer", "mode": "add", "dose": dose,
+            "doses": [0.0, dose], "challenge": ch, "seeds": [seed + i for i in range(n)], "n": n, "temperature": temp,
+            "max_tokens": max_new, "prompt": prompt, "measures": [measure, "coherence", "script mix"], "toxic": cfg["toxic"],
+            "raw": raw, "summary": res, "prediction": b.get("prediction"), "verdict": None})
+        log = _read_json(CHALLENGE_LOG, {"attempts": []})
+        log["attempts"].append({"time": datetime.datetime.now().isoformat(timespec="seconds"), "challenge": ch["id"],
+                                "neurons": neurons, "dose": dose, "n": n, "value": res["value"], "passed": res["passed"],
+                                "coherence_drop": res["coherence_drop"], "experiment": eid})
+        _write_json(CHALLENGE_LOG, log)
+        emit(exm.finite({"result": {**res, "id": eid, "texts": raw[1]["texts"], "base_texts": raw[0]["texts"],
+                                    "best": lab.best(ch, log["attempts"])}}))
+        emit({"end": True, "id": eid, "cancelled": False})
+    except Exception as e:
+        emit({"error": repr(e)})
+        emit({"end": True, "cancelled": True})
+    finally:
+        job["done"] = True
+
+
 @app.post("/api/experiment/verdict")
 async def experiment_verdict(req: Request):
     """Marks an experiment's prediction confirmed, disconfirmed or inconclusive (null clears it). The prediction

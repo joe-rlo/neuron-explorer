@@ -1363,7 +1363,7 @@ $("#lab-nav").onclick = e => {
   LAB.view = b.dataset.l; document.querySelectorAll("#lab-nav button").forEach(x => x.classList.toggle("on", x === b)); renderLab();
 };
 function renderLab() {
-  ({ notebook: renderNotebook })[LAB.view]?.();
+  ({ notebook: renderNotebook, challenges: renderChallenges })[LAB.view]?.();
 }
 const when = ts => { const d = new Date(ts); return isNaN(d) ? "" : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toTimeString().slice(0, 5)}`; };
 const neuronChip = x => `<span class="chip nchip" data-l="${x.layer}" data-n="${x.n}" title="open this neuron">L${x.layer} N${x.n}</span>`;
@@ -1388,6 +1388,8 @@ async function renderNotebook() {
 }
 $("#lab-body").addEventListener("click", e => {
   if (e.target.id === "nb-only") { LAB.only = e.target.checked; renderNotebook(); return; }
+  const ca = e.target.closest(".ch-go"); if (ca) { runChallenge(ca.closest(".ch").dataset.id); return; }
+  if (e.target.closest(".ch-cancel") && CH.run?.job) { api("/api/experiment/cancel", { id: CH.run.job }).catch(() => {}); return; }
   const c = e.target.closest(".nchip"); if (c) { goToNeuron(+c.dataset.l, +c.dataset.n); return; }
   const v = e.target.closest(".vseg[data-id] button[data-v]");
   if (v) {
@@ -1399,6 +1401,61 @@ $("#lab-body").addEventListener("click", e => {
     });
   }
 });
+
+// ---- challenges: a goal and a constraint; an attempt steers the open neuron (or the set) and must keep the text coherent ----
+const CH = { list: null, toxic: null, dose: {}, run: null };
+const attemptNeurons = () => pinned.length ? pinned : state.focus?.kind === "neuron" ? [{ layer: state.focus.layer, n: state.focus.n }] : [];
+const chValue = (m, v) => v == null ? "—" : m.type === "contains" ? pct(v) : m.type === "words" ? `${num(v)} /100 words` : `${num(v)} /reply`;
+async function renderChallenges(reload = true) {
+  const el = $("#lab-body");
+  if (reload || !CH.list) {
+    try { const r = await api("/api/challenges"); CH.list = r.challenges; CH.toxic = r.toxic; }
+    catch (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; }
+  }
+  if (curTab() !== "lab" || LAB.view !== "challenges") return;
+  const who = attemptNeurons();
+  const whoHTML = who.length ? `${pinned.length ? "the set: " : "the open neuron "}${who.map(neuronChip).join("")}` : `<span class="warn">no neuron: open one, or build a set with + set</span>`;
+  const rule = c => c.minimize === "neurons" ? "fewest neurons wins, then the smallest |dose|" : "smallest |dose| wins, then the fewest neurons";
+  el.innerHTML = `<div class="xnote dim">An attempt runs the prompt ${X.cfg?.n ?? 8} times unsteered and ${X.cfg?.n ?? 8} times steered, paired by seed. It counts only if the goal is met and coherence stays within ${CH.toxic?.coherence_drop ?? 1} of the unsteered replies (the same toxic threshold as the dose sweep).</div>
+    <div class="xnote">Steering with ${whoHTML}</div>`
+    + CH.list.map(c => {
+      const r = CH.run?.id === c.id ? CH.run : null;
+      const best = c.best.length ? `<table class="xstat ch-best"><tr><th></th><th>dose</th><th>neurons</th><th>${esc(c.measure.name)}</th><th></th></tr>${c.best.map((a, k) =>
+          `<tr><td>${k + 1}</td><td>${fmtDose(a.dose)}</td><td>${a.neurons.map(neuronChip).join("")}</td><td>${chValue(c.measure, a.value)}</td><td class="dim">${esc(when(a.time))}</td></tr>`).join("")}</table>`
+        : `<div class="xnote dim">No passing attempt yet${c.tries ? ` (${c.tries} tr${c.tries === 1 ? "y" : "ies"})` : ""}.</div>`;
+      const status = !r ? "" : r.live ? `<div class="xnote dim">${r.progress ? `${r.progress.done}/${r.progress.total} replies · about ${Math.round(r.progress.eta)} s left` : "starting…"} · <button type="button" class="ch-cancel x-cancel">cancel</button></div>`
+        : r.error ? `<div class="err">${esc(r.error)}</div>` : r.cancelled ? `<div class="xnote dim">cancelled</div>`
+        : r.result ? `<div class="xline ${r.result.passed ? "pass" : "fail"}">${esc(r.result.sentence)}</div><div class="xnote dim">unsteered: ${chValue(c.measure, r.result.baseline)}</div>
+            <details class="xsent"><summary class="dim">steered replies</summary>${r.result.texts.map(t => `<div class="ch-reply">${esc(t)}</div>`).join("")}</details>` : "";
+      return `<div class="ch" data-id="${esc(c.id)}"><div class="ch-head"><b>${esc(c.name)}</b><span class="dim"> · ${rule(c)}</span></div>
+        <div class="xline">${esc(c.goal)}</div><div class="recipe mono dim">“${esc(c.prompt)}” · ${esc(c.measure.name)}</div>${best}
+        <div class="ch-try"><label class="xf">dose<input class="mono ch-dose" inputmode="decimal" value="${esc(CH.dose[c.id] ?? "0.5")}" aria-label="dose"></label>
+          <button type="button" class="ch-go"${who.length && !X.job ? "" : " disabled"}>attempt</button></div>${status}</div>`;
+    }).join("");
+}
+$("#lab-body").addEventListener("input", e => { if (e.target.classList.contains("ch-dose")) CH.dose[e.target.closest(".ch").dataset.id] = e.target.value; });
+async function runChallenge(id) {
+  const neurons = attemptNeurons(), dose = parseFloat(String(CH.dose[id] ?? "0.5").replace("−", "-"));
+  if (!neurons.length || X.job) return;
+  if (!Number.isFinite(dose) || !dose) { $("#status").textContent = "the dose must be a number other than 0"; return; }
+  const r = CH.run = { id, live: true, progress: null };
+  renderChallenges(false);
+  let s;
+  try { s = await api("/api/challenge/attempt", { id, neurons, dose, samples: X.cfg?.n ?? 8, temperature: X.cfg?.temperature, seed: X.cfg?.seed }); }
+  catch (err) { s = { error: err.message }; }
+  if (s.error) { Object.assign(r, { live: false, error: s.error }); renderChallenges(false); return; }
+  r.job = s.id; X.job = { id: s.id };
+  try {
+    await sse(await fetch(`/api/experiment/events?id=${s.id}`), ev => {
+      if (ev.error) r.error = ev.error;
+      if (ev.progress) r.progress = ev.progress;
+      if (ev.result) r.result = ev.result;
+      if (ev.end) Object.assign(r, { live: false, cancelled: ev.cancelled });
+      if (curTab() === "lab" && LAB.view === "challenges") renderChallenges(false);
+    });
+  } catch (err) { r.error = String(err); }
+  finally { X.job = null; r.live = false; if (curTab() === "lab" && LAB.view === "challenges") renderChallenges(); }
+}
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
 const T = { sets: [], scores: {}, pending: new Set(), running: false };

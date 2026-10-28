@@ -963,12 +963,12 @@ const entryHTML = (t, i) => t.kind === "sweep" ? `<div class="turn sweep" data-i
   : t.kind === "task" ? `<div class="turn sweep task" data-i="${i}">${taskHTML(t)}</div>` : t.kind === "ablate" ? ablateHTML(t, i) : turnHTML(t, i);
 const COL_TIPS = ["pushed up by +dose", "unsteered: the baseline the other two are compared with", "pushed down by −dose"];
 function turnHTML(t, i) {
-  const S = t.summary, labs = turnLabels(t), m = t.measure;
+  const S = t.summary, labs = turnLabels(t), m = t.measure, hide = t.blind && !t.blind.picked;
   const picker = t.n > 1 ? `<div class="picker" role="group" aria-label="reply"><span class="xk" title="each column has ${t.n} replies; reply i used the same seed in all three, so they line up">reply</span>${Array.from({ length: t.n }, (_, s) =>
     `<button type="button" data-s="${s}" class="${s === t.pick ? "on" : ""}">${s + 1}</button>`).join("")}</div>` : "";
   // nothing to compare when no reply in any column scored above zero: say so instead of three "unchanged" lines
   const none = S && m && S.columns.every(c => c.measure.mean === 0 && !c.measure.sd);
-  const notes = !S ? (t.scoring ? `<div class="xnote dim">scoring…</div>` : "")
+  const notes = hide ? "" : !S ? (t.scoring ? `<div class="xnote dim">scoring…</div>` : "")
     : (none ? `<div class="xnote">No reply in any column had any ${esc(m.name)}, so there is nothing to compare.${m.auto ? "" : ` Try ${LENS_MEASURE}, which counts the words this neuron's lens points at.`}</div>`
       : S.columns.filter(c => c.vs0).map(c => `<div class="xline">${esc(c.vs0.sentence)}</div>`).join(""))
     + (S.warn ? `<div class="xnote warn">${S.n} replies per column (under ${X.cfg?.warn_n ?? 5}), so these intervals are rough.</div>` : "")
@@ -976,12 +976,13 @@ function turnHTML(t, i) {
   return `<div class="turn" data-i="${i}">
     <div class="user">${esc(t.user)}<span class="recipe">${t.mode === "mul" ? "×" : "add"} ${t.dose}${t.n > 1 ? ` · ${t.n} replies · temp ${t.temperature}` : ""}${m ? ` · ${esc(m.name)}${m.auto ? ` (${esc(m.words.join(", "))})` : ""}` : ""}</span></div>
     ${picker}
-    <div class="cols">${ROWS.map((c, r) => {
-      const C = S?.columns[r], sc = C?.scores?.[t.pick], coh = C?.coh_scores?.[t.pick];
-      const one = sc != null ? `<span class="one" title="scores of the reply shown">reply ${t.pick + 1}: ${num(sc)}${coh != null ? ` · coherence ${num(coh)}` : ""}</span>` : "";
-      return `<div class="col ${c}${t.live && !t.done[r] ? " live" : ""}"><span class="lab" title="${COL_TIPS[r]}">${labs[r]}</span>${C ? colStats(C, m) : ""}<span class="txt">${esc(t.replies[r][t.pick] || "")}</span>${one}</div>`;
+    <div class="cols">${(t.blind ? t.blind.order : [0, 1, 2]).map((r, j) => {
+      const c = ROWS[r], C = S?.columns[r], sc = C?.scores?.[t.pick], coh = C?.coh_scores?.[t.pick];
+      const one = sc != null && !hide ? `<span class="one" title="scores of the reply shown">reply ${t.pick + 1}: ${num(sc)}${coh != null ? ` · coherence ${num(coh)}` : ""}</span>` : "";
+      const lab = !t.blind ? labs[r] : hide ? BLIND_NAMES[j] : `${BLIND_NAMES[j]} · ${labs[r]}`;
+      return `<div class="col ${hide ? "blind" : c}${t.live && !t.done[r] ? " live" : ""}" data-r="${r}"><span class="lab" title="${hide ? "hidden until you pick" : COL_TIPS[r]}">${lab}</span>${C && !hide ? colStats(C, m) : ""}<span class="txt">${esc(t.replies[r][t.pick] || "")}</span>${one}</div>`;
     }).join("")}
-    ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>${notes}${predHTML(t)}</div>`;
+    ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>${t.blind ? blindHTML(t) : ""}${notes}${predHTML(t)}</div>`;
 }
 // a column's stats over its n replies: the measure's mean and 95% interval, the paired difference from the
 // unsteered column with its effect size, and coherence
@@ -998,13 +999,20 @@ $("#c-thread").addEventListener("click", e => {
   const b = e.target.closest(".picker button");
   if (b) { const t = state.thread[+b.closest(".turn").dataset.i]; t.pick = +b.dataset.s; renderTurn(t); return; }
   if (e.target.closest(".x-cancel") && X.job) api("/api/experiment/cancel", { id: X.job.id }).catch(() => {});
+  const bp = e.target.closest(".blind-q button[data-j]");
+  if (bp) { pickBlind(state.thread[+bp.closest(".turn").dataset.i], +bp.dataset.j); return; }
   const v = e.target.closest(".xpred button[data-v]");
   if (v) { const t = state.thread[+v.closest(".turn").dataset.i], to = t.verdict === v.dataset.v ? null : v.dataset.v;
            setVerdict(expIdOf(t), to).then(ok => { if (ok) { t.verdict = to; renderTurn(t); } }); }
 });
 function renderTurn(t) {
   const i = state.thread.indexOf(t), el = $(`#c-thread .turn[data-i="${i}"]`);
-  if (el) el.outerHTML = entryHTML(t, i);
+  if (!el) return;
+  // a re-render while the blind property is being typed keeps the cursor where it was
+  const a = document.activeElement, typing = el.contains(a) && a.classList.contains("bprop") ? a.selectionStart : null;
+  el.outerHTML = entryHTML(t, i);
+  const box = typing != null && $(`#c-thread .turn[data-i="${i}"] .bprop`);
+  if (box) { box.focus(); box.setSelectionRange(typing, typing); }
 }
 $("#c-clear").onclick = () => { if (running) running.abort(); if (X.job) api("/api/experiment/cancel", { id: X.job.id }).catch(() => {}); state.thread = []; renderThread(); };
 let reading = false;
@@ -1035,7 +1043,8 @@ $("#c-form").addEventListener("submit", async e => {
   const history = state.thread.filter(t => !t.kind && !t.error).map(t => ({ user: t.user, replies: t.replies }));
   const blank = () => Array.from({ length: x.n }, () => "");
   const turn = { user: text, n: x.n, pick: 0, replies: [blank(), blank(), blank()], done: [false, false, false], dose,
-                 mode: state.chat.mode, temperature: x.temperature, measure: x.measure, live: true, prediction: takePrediction() };
+                 mode: state.chat.mode, temperature: x.temperature, measure: x.measure, live: true, prediction: takePrediction(),
+                 blind: state.chat.blind ? { order: shuffle([0, 1, 2]), property: lastProperty, target: "up", picked: null } : null };
   state.thread.push(turn); $("#c-input").value = ""; renderThread();
   const ctl = new AbortController(), thread = state.thread;
   running = ctl; $("#c-go").textContent = "stop";
@@ -1052,7 +1061,7 @@ $("#c-form").addEventListener("submit", async e => {
       if (ev.row == null) return;
       turn.replies[ev.row][ev.s] += ev.t;
       if (ev.s !== turn.pick) return;
-      const txt = $(`#c-thread .turn[data-i="${state.thread.indexOf(turn)}"] .col.${ROWS[ev.row]} .txt`);
+      const txt = $(`#c-thread .turn[data-i="${state.thread.indexOf(turn)}"] .col[data-r="${ev.row}"] .txt`);
       if (txt) txt.textContent += ev.t;
       const th = $("#c-thread"); if (th.scrollHeight - th.scrollTop - th.clientHeight < 80) th.scrollTop = th.scrollHeight;
     });
@@ -1286,6 +1295,47 @@ function statementsHTML(t) {
   const head = `<tr><th></th>${ds.map(d => `<th>${fmtDose(d)}</th>`).join("")}</tr>`;
   const rows = t.statements.map((s, j) => `<tr><td>${esc(s)}</td>${ds.map(d => `<td>${num(t.points[d].items[j])}</td>`).join("")}</tr>`).join("");
   return `<details class="xsent"><summary class="dim">each statement</summary><table class="xstat">${head}${rows}</table></details>`;
+}
+
+// ---------- blind rating: columns shuffled as X, Y, Z; name a property, pick the column that shows it, then reveal ----------
+const BLIND_NAMES = ["X", "Y", "Z"];
+let lastProperty = "";
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+$("#c-blind").onclick = () => {
+  state.chat.blind = !state.chat.blind;
+  $("#c-blind").classList.toggle("on", state.chat.blind); $("#c-blind").setAttribute("aria-pressed", String(state.chat.blind));
+};
+function blindHTML(t) {
+  const b = t.blind;
+  if (b.picked) {
+    const j = b.order.indexOf(ROWS.indexOf(b.picked)), hit = b.picked === b.target, want = b.target === "up" ? "▲ pushed up" : "▼ pushed down";
+    return `<div class="blind-res"><span class="${hit ? "hit" : "miss"}">${hit ? "✓" : "✗"}</span> “${esc(b.property)}”: you picked ${BLIND_NAMES[j]}, the ${b.picked === "zero" ? "unsteered" : b.picked === "up" ? "▲ pushed up" : "▼ pushed down"} column; the ${want} column was ${BLIND_NAMES[b.order.indexOf(ROWS.indexOf(b.target))]}.</div>`
+      + (b.stats ? `<div class="xline">${esc(b.stats.sentence)}</div>` : b.error ? `<div class="err">${esc(b.error)}</div>` : "");
+  }
+  const ready = !t.live && !t.error;
+  return `<div class="blind-q">
+    <input class="bprop" placeholder="property, e.g. more about aliens" value="${esc(b.property)}" aria-label="property" spellcheck="false">
+    <select class="btarget" aria-label="which push should show it" title="a hit is picking the column pushed this way"><option value="up"${b.target === "up" ? " selected" : ""}>from ▲ push up</option><option value="down"${b.target === "down" ? " selected" : ""}>from ▼ push down</option></select>
+    <span class="dim">${ready ? "shows it most:" : "replies coming…"}</span>${BLIND_NAMES.map((x, j) => `<button type="button" data-j="${j}"${ready ? "" : " disabled"}>${x}</button>`).join("")}</div>`;
+}
+$("#c-thread").addEventListener("input", e => {
+  const t = state.thread[+e.target.closest(".turn")?.dataset.i]; if (!t?.blind) return;
+  if (e.target.classList.contains("bprop")) t.blind.property = lastProperty = e.target.value;
+});
+$("#c-thread").addEventListener("change", e => {
+  const t = state.thread[+e.target.closest(".turn")?.dataset.i];
+  if (t?.blind && e.target.classList.contains("btarget")) t.blind.target = e.target.value;
+});
+async function pickBlind(t, j) {
+  const b = t.blind, f = state.focus;
+  if (!b || b.picked || t.live) return;
+  if (!b.property.trim()) { const el = $(`#c-thread .turn[data-i="${state.thread.indexOf(t)}"] .bprop`); el?.focus(); el?.classList.add("need"); return; }
+  b.picked = ROWS[b.order[j]]; renderTurn(t);
+  try {
+    b.stats = await api("/api/blind/trial", { layer: f.layer, n: f.n, property: b.property.trim(), target: b.target, picked: b.picked,
+      order: b.order.map(r => ROWS[r]), dose: t.dose, mode: t.mode, prompt: t.user, sample: t.pick, experiment: t.summary?.id ?? null });
+  } catch (err) { b.error = err.message; }
+  renderTurn(t);
 }
 
 // ---------- hypothesis log: a prediction written before a run, saved with it, judged once the results are in ----------

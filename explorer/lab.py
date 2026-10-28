@@ -1,6 +1,8 @@
 """Lab: the records and games built on experiment mode. The notebook's one-line view of each saved experiment (what
-was run, its result and the prediction made before it). Pure python; storage and the model are in server.py.
+was run, its result and the prediction made before it) and blind rating's binomial test. Pure python; storage and the
+model are in server.py.
 """
+import math
 import re
 
 VERDICTS = ("confirmed", "disconfirmed", "inconclusive")
@@ -64,3 +66,33 @@ def entry(rec):
     return {"id": rec["id"], "timestamp": rec.get("timestamp"), "kind": rec.get("kind"), "layer": rec.get("layer"),
             "neurons": rec.get("neurons") or [], "what": describe(rec), "result": headline(rec),
             "prediction": (rec.get("prediction") or "").strip() or None, "verdict": rec.get("verdict")}
+
+
+# ---------- blind rating ----------
+CHANCE = 1 / 3  # three columns
+
+
+def binom_sf(k, n, p):
+    """P(X >= k) for X ~ Binomial(n, p): the one-sided p-value of k hits in n trials at chance p."""
+    return min(1.0, sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(max(k, 0), n + 1)))
+
+
+def blind_stats(trials):
+    """Running accuracy of blind picks (a hit is picking the column pushed the way the trial expected) against
+    chance, with an exact one-sided binomial p-value and a sentence."""
+    n, hits = len(trials), sum(t["picked"] == t["target"] for t in trials)
+    if not n:
+        return {"n": 0, "hits": 0, "accuracy": None, "p": None, "chance": CHANCE, "sentence": "No blind trials yet."}
+    p = binom_sf(hits, n, CHANCE)
+    read = ("unlikely to be luck" if p < 0.05 else "could still be luck") if n >= 5 else "too few trials to tell yet"
+    return {"n": n, "hits": hits, "accuracy": hits / n, "p": p, "chance": CHANCE,
+            "sentence": f"{hits} of {n} blind pick{'s' * (n != 1)} found the steered column ({hits / n:.0%}; chance is "
+                        f"33%), one-sided binomial p = {p:.3g}: {read}."}
+
+
+def blind_summary(trials):
+    """All of one neuron's trials together, and per property."""
+    props = {}
+    for t in trials:
+        props.setdefault(t["property"].strip().lower(), []).append(t)
+    return {**blind_stats(trials), "by_property": {k: blind_stats(v) for k, v in props.items()}}

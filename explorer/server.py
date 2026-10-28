@@ -945,6 +945,38 @@ def notebook(layer: int = -1, n: int = -1, limit: int = 300):
     return {"entries": es[:limit], "total": len(es)}
 
 
+# ---------- blind rating: the chat's columns shuffled as X, Y, Z; the user picks the one that shows a property ----------
+BLIND = os.path.join(EXPERIMENTS, "blind.json")
+
+
+def _blind_trials(layer, n):
+    return [t for t in _read_json(BLIND, {"trials": []})["trials"] if t["layer"] == layer and t["n"] == n]
+
+
+@app.get("/api/blind")
+def blind(layer: int, n: int):
+    return lab.blind_summary(_blind_trials(layer, n))
+
+
+@app.post("/api/blind/trial")
+async def blind_trial(req: Request):
+    """Logs one blind trial: the property, the side expected to show it (target, "up" or "down"), the column picked
+    ("up", "zero" or "down") and the shuffled order shown. Returns the neuron's running stats."""
+    import datetime
+    b = await req.json()
+    prop = str(b.get("property", "")).strip()
+    if not prop or b.get("target") not in ("up", "down") or b.get("picked") not in ("up", "zero", "down"):
+        return JSONResponse({"error": "a trial needs a property, a target (up or down) and a pick"}, status_code=400)
+    layer, n = int(b["layer"]), int(b["n"])
+    log = _read_json(BLIND, {"trials": []})
+    log["trials"].append({"time": datetime.datetime.now().isoformat(timespec="seconds"), "layer": layer, "n": n,
+                          "property": prop, "target": b["target"], "picked": b["picked"], "order": b.get("order"),
+                          "dose": b.get("dose"), "mode": b.get("mode"), "prompt": b.get("prompt"), "sample": b.get("sample"),
+                          "experiment": b.get("experiment")})
+    _write_json(BLIND, log)
+    return lab.blind_summary(_blind_trials(layer, n))
+
+
 @app.post("/api/experiment/verdict")
 async def experiment_verdict(req: Request):
     """Marks an experiment's prediction confirmed, disconfirmed or inconclusive (null clears it). The prediction

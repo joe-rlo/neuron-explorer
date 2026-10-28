@@ -36,3 +36,25 @@ def test_long_prompts_clip_and_entry_fields():
     assert len(e["what"]) < 100 and "…" in e["what"]
     assert e["prediction"] is None  # blank predictions count as none
     assert lab.EXPERIMENT_FILE.match(rec["id"]) and not lab.EXPERIMENT_FILE.match("../windows")
+
+
+# ---------- blind rating ----------
+def test_binomial_tail_matches_direct_sum():
+    assert lab.binom_sf(0, 10, 1 / 3) == 1.0
+    assert abs(lab.binom_sf(10, 10, 1 / 3) - (1 / 3) ** 10) < 1e-15
+    assert abs(lab.binom_sf(7, 10, 1 / 3) - 0.01966) < 1e-4  # 7 of 10 at chance 1/3
+    assert abs(lab.binom_sf(2, 3, 0.5) - 0.5) < 1e-12
+
+
+def trial(prop, target, picked):
+    return {"property": prop, "target": target, "picked": picked}
+
+
+def test_blind_stats_counts_hits_against_target():
+    ts = [trial("aliens", "up", "up")] * 7 + [trial("aliens", "up", "zero")] * 2 + [trial("Aliens ", "down", "up")]
+    s = lab.blind_summary(ts)
+    assert s["n"] == 10 and s["hits"] == 7 and abs(s["accuracy"] - 0.7) < 1e-12
+    assert s["p"] < 0.05 and "unlikely to be luck" in s["sentence"]
+    assert list(s["by_property"]) == ["aliens"]  # properties group without case or spaces
+    few = lab.blind_stats([trial("x", "up", "up")] * 2)
+    assert "too few" in few["sentence"] and lab.blind_stats([])["accuracy"] is None

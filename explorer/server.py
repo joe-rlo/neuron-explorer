@@ -24,6 +24,7 @@ from rank import compute_units  # noqa: E402
 from runtime import CACHE, NO_MODEL, Runtime  # noqa: E402
 import experiment as exm  # noqa: E402
 import tasks as tk  # noqa: E402
+import lab  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 NAMES = os.path.join(ROOT, "explorer", "names.json")
@@ -905,6 +906,61 @@ async def experiment_cancel(req: Request):
     if job:
         job["cancel"].set()
     return {"ok": job is not None}
+
+
+# ---------- lab: the notebook (every saved experiment, newest first, with its prediction and verdict) ----------
+_notebook = {}
+
+
+def _experiment_path(eid):
+    if not lab.EXPERIMENT_FILE.match(eid or ""):
+        return None
+    path = os.path.join(EXPERIMENTS, eid + ".json")
+    return path if os.path.exists(path) else None
+
+
+def _notebook_entries():
+    """A notebook row per experiment file, cached by modification time."""
+    out = []
+    for path in glob.glob(os.path.join(EXPERIMENTS, "*.json")):
+        eid = os.path.basename(path)[:-5]
+        if not lab.EXPERIMENT_FILE.match(eid):
+            continue
+        mt = os.path.getmtime(path)
+        if _notebook.get(eid, (None,))[0] != mt:
+            rec = _read_json(path, None)
+            if not rec:
+                continue
+            _notebook[eid] = (mt, lab.entry(rec))
+        out.append(_notebook[eid][1])
+    return sorted(out, key=lambda e: e["id"], reverse=True)
+
+
+@app.get("/api/notebook")
+def notebook(layer: int = -1, n: int = -1, limit: int = 300):
+    """Experiments newest first; with layer and n, only those that touched that neuron."""
+    es = _notebook_entries()
+    if layer >= 0:
+        es = [e for e in es if any(x["layer"] == layer and x["n"] == n for x in e["neurons"])]
+    return {"entries": es[:limit], "total": len(es)}
+
+
+@app.post("/api/experiment/verdict")
+async def experiment_verdict(req: Request):
+    """Marks an experiment's prediction confirmed, disconfirmed or inconclusive (null clears it). The prediction
+    itself is fixed when the run starts."""
+    b = await req.json()
+    path, v = _experiment_path(b.get("id")), b.get("verdict")
+    if path is None:
+        return JSONResponse({"error": "no such experiment"}, status_code=404)
+    if v is not None and v not in lab.VERDICTS:
+        return JSONResponse({"error": f"verdict must be one of {', '.join(lab.VERDICTS)}"}, status_code=400)
+    rec = _read_json(path, None)
+    if not rec.get("prediction"):
+        return JSONResponse({"error": "this experiment has no prediction to judge"}, status_code=400)
+    rec["verdict"] = v
+    _write_json(path, rec)
+    return {"ok": True, "verdict": v}
 
 
 LENS_INDEX = os.path.join(ROOT, "explorer", "cache", "lens_index.npz")

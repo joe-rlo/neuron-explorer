@@ -567,10 +567,10 @@ $("#focus-tab").onclick = () => focusEl.classList.contains("on") ? setFocusColla
 
 // ---------- focus panel ----------
 const focusEl = $("#focus");
-// closing the neuron keeps the panel up when Claude is the open tab
+// closing the neuron keeps the panel up when Claude or Lab is the open tab
 $("#f-close").onclick = () => { flushName(); if (running) running.abort(); state.focus = null; $("#list").classList.remove("has-focus");
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
-  if (curTab() === "claude") syncTabs(); else focusEl.classList.remove("on");
+  if (curTab() === "claude" || curTab() === "lab") syncTabs(); else focusEl.classList.remove("on");
   setFocusCollapsed(false); map.select(null); refreshWeb(); renderAgentActions(); scatter.select(null, null); saveFocus(); renderList(); };
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const tabBtn = t => $(`#tabs button[data-tab="${t}"]`);
@@ -581,10 +581,11 @@ function setTab(t) {
   focusEl.classList.toggle("on-claude", t === "claude");
   tabBtn(t).classList.remove("fresh");
   if (t === "claude") { const th = $("#a-thread"); th.scrollTop = th.scrollHeight; }
+  if (t === "lab") renderLab();
 }
 // a tab that changed while another was showing gets a dot until opened
 function markFresh(t) { if (curTab() !== t) tabBtn(t).classList.add("fresh"); }
-// neuron tabs show while a neuron is open (Chat for real neurons only); Claude always
+// neuron tabs show while a neuron is open (Chat for real neurons only); Lab and Claude always
 function syncTabs() {
   const f = state.focus?.kind === "head" ? null : state.focus;
   for (const t of ["examples", "details"]) tabBtn(t).style.display = f ? "" : "none";
@@ -980,7 +981,7 @@ function turnHTML(t, i) {
       const one = sc != null ? `<span class="one" title="scores of the reply shown">reply ${t.pick + 1}: ${num(sc)}${coh != null ? ` · coherence ${num(coh)}` : ""}</span>` : "";
       return `<div class="col ${c}${t.live && !t.done[r] ? " live" : ""}"><span class="lab" title="${COL_TIPS[r]}">${labs[r]}</span>${C ? colStats(C, m) : ""}<span class="txt">${esc(t.replies[r][t.pick] || "")}</span>${one}</div>`;
     }).join("")}
-    ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>${notes}</div>`;
+    ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>${notes}${predHTML(t)}</div>`;
 }
 // a column's stats over its n replies: the measure's mean and 95% interval, the paired difference from the
 // unsteered column with its effect size, and coherence
@@ -997,6 +998,9 @@ $("#c-thread").addEventListener("click", e => {
   const b = e.target.closest(".picker button");
   if (b) { const t = state.thread[+b.closest(".turn").dataset.i]; t.pick = +b.dataset.s; renderTurn(t); return; }
   if (e.target.closest(".x-cancel") && X.job) api("/api/experiment/cancel", { id: X.job.id }).catch(() => {});
+  const v = e.target.closest(".xpred button[data-v]");
+  if (v) { const t = state.thread[+v.closest(".turn").dataset.i], to = t.verdict === v.dataset.v ? null : v.dataset.v;
+           setVerdict(expIdOf(t), to).then(ok => { if (ok) { t.verdict = to; renderTurn(t); } }); }
 });
 function renderTurn(t) {
   const i = state.thread.indexOf(t), el = $(`#c-thread .turn[data-i="${i}"]`);
@@ -1031,14 +1035,15 @@ $("#c-form").addEventListener("submit", async e => {
   const history = state.thread.filter(t => !t.kind && !t.error).map(t => ({ user: t.user, replies: t.replies }));
   const blank = () => Array.from({ length: x.n }, () => "");
   const turn = { user: text, n: x.n, pick: 0, replies: [blank(), blank(), blank()], done: [false, false, false], dose,
-                 mode: state.chat.mode, temperature: x.temperature, measure: x.measure, live: true };
+                 mode: state.chat.mode, temperature: x.temperature, measure: x.measure, live: true, prediction: takePrediction() };
   state.thread.push(turn); $("#c-input").value = ""; renderThread();
   const ctl = new AbortController(), thread = state.thread;
   running = ctl; $("#c-go").textContent = "stop";
   try {
     const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
       body: JSON.stringify({ layer: f.layer, n: f.n, prompt: text, dose, mode: state.chat.mode, history,
-                             samples: x.n, temperature: x.temperature, seed: x.seed, max_new: x.max_new, measure: x.measure }) });
+                             samples: x.n, temperature: x.temperature, seed: x.seed, max_new: x.max_new, measure: x.measure,
+                             prediction: turn.prediction }) });
     if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
     await sse(res, ev => {
       if (ev.error) turn.error = ev.error;
@@ -1072,7 +1077,8 @@ async function runSweep(quick) {
                  ...(quick ? { doses: X.cfg.quick.doses, samples: X.cfg.quick.n, max_new: X.cfg.quick.max_new }
                            : { doses: X.cfg.sweep_doses, samples: x.n, max_new: x.max_new }) };
   const t = { kind: "sweep", prompt, measure: x.measure, layer: f.layer, neuron: f.n, n: body.samples, temperature: x.temperature,
-              doses: [...new Set([...body.doses, 0])].sort((a, b) => a - b), points: {}, live: true, progress: null };
+              doses: [...new Set([...body.doses, 0])].sort((a, b) => a - b), points: {}, live: true, progress: null,
+              prediction: body.prediction = takePrediction() };
   state.thread.push(t); renderThread();
   let r;
   try { r = await api("/api/experiment/sweep", body); } catch (err) { r = { error: err.message }; }
@@ -1108,7 +1114,7 @@ function sweepHTML(t) {
   const notes = Object.values(t.points).filter(q => q.vs0).sort((a, b) => a.dose - b.dose).map(q => `<div class="xline">${esc(q.vs0.sentence)}</div>`).join("");
   const repro = t.reproducible === false ? `<div class="xnote dim">Running on ${esc(t.device)}: the same seed may not reproduce this exact text.</div>` : "";
   return head + prog + sweepPlot(t) + win + (t.error ? `<div class="err">${esc(t.error)}</div>` : "")
-    + (notes ? `<details class="xsent"><summary class="dim">each dose vs 0</summary>${notes}</details>` : "") + repro;
+    + (notes ? `<details class="xsent"><summary class="dim">each dose vs 0</summary>${notes}</details>` : "") + predHTML(t) + repro;
 }
 // the therapeutic window per direction, in words: where the measure starts to move (ED) and where coherence breaks (TD)
 const WINDOW_TIP = "ED (effective dose): the smallest dose whose change in the measure has a 95% interval that excludes zero. "
@@ -1222,10 +1228,10 @@ async function runTask() {
   if (statements && !statements.length) { $("#status").textContent = "write at least one statement to rate"; return; }
   const doses = X.cfg.sweep_doses;
   const t = { kind: "task", task: k, statements, layer: f.layer, neuron: f.n, doses: [...new Set([...doses, 0])].sort((a, b) => a - b),
-              measure: { name: k.parameter, type: "task" }, points: {}, live: true, progress: null };
+              measure: { name: k.parameter, type: "task" }, points: {}, live: true, progress: null, prediction: takePrediction() };
   state.thread.push(t); renderThread();
   let r;
-  try { r = await api("/api/experiment/task", { layer: f.layer, n: f.n, id: k.id, doses, ...(statements ? { statements } : {}) }); }
+  try { r = await api("/api/experiment/task", { layer: f.layer, n: f.n, id: k.id, doses, prediction: t.prediction, ...(statements ? { statements } : {}) }); }
   catch (err) { r = { error: err.message }; }
   if (r.error) { t.error = r.error; t.live = false; renderTurn(t); return; }
   X.job = { id: r.id, t };
@@ -1270,7 +1276,7 @@ function taskHTML(t) {
   const repro = t.reproducible === false ? `<div class="xnote dim">Running on ${esc(t.device)}: the same inputs may give slightly different probabilities elsewhere.</div>` : "";
   return head + prog + plot + (t.window ? windowHTML(t.window, name, name, "answers") : "") + edge + bias + (t.error ? `<div class="err">${esc(t.error)}</div>` : "")
     + (lines ? `<details class="xsent"><summary class="dim">each dose</summary>${lines}</details>` : "") + statementsHTML(t)
-    + `<details class="xsent"><summary class="dim">how to read this</summary><div class="xline method">${esc(k.method)}</div></details>` + repro;
+    + `<details class="xsent"><summary class="dim">how to read this</summary><div class="xline method">${esc(k.method)}</div></details>` + predHTML(t) + repro;
 }
 
 // a Likert run's statements, each with its rating at every dose so far (flipped back where 7 meant disagree)
@@ -1281,6 +1287,68 @@ function statementsHTML(t) {
   const rows = t.statements.map((s, j) => `<tr><td>${esc(s)}</td>${ds.map(d => `<td>${num(t.points[d].items[j])}</td>`).join("")}</tr>`).join("");
   return `<details class="xsent"><summary class="dim">each statement</summary><table class="xstat">${head}${rows}</table></details>`;
 }
+
+// ---------- hypothesis log: a prediction written before a run, saved with it, judged once the results are in ----------
+const VERDICTS = ["confirmed", "disconfirmed", "inconclusive"];
+function takePrediction() { const el = $("#x-pred"), v = el.value.trim(); el.value = ""; return v || null; }
+const expIdOf = t => t.expId || t.summary?.id || null;
+const verdictSeg = (v, id) => `<span class="seg vseg"${id ? ` data-id="${esc(id)}"` : ""}>${VERDICTS.map(k => `<button type="button" data-v="${k}" class="${v === k ? "on" : ""}" title="mark the prediction ${k}">${k}</button>`).join("")}</span>`;
+function predHTML(t) {
+  if (!t.prediction) return "";
+  const id = expIdOf(t);
+  const marks = id ? verdictSeg(t.verdict, null) : t.live ? `<span class="dim">judge it once the results are in</span>`
+    : `<span class="dim">not saved: ${t.kind ? "the run didn't finish" : "chat runs are saved only with a measure"}</span>`;
+  return `<div class="xpred"><span class="xk">prediction</span><span class="ptxt">${esc(t.prediction)}</span>${marks}</div>`;
+}
+async function setVerdict(id, verdict) {
+  try { await api("/api/experiment/verdict", { id, verdict }); return true; }
+  catch (err) { $("#status").textContent = err.message; return false; }
+}
+
+// ---------- lab: the notebook, the field guide and the games, in one tab that stays up without a neuron ----------
+const LAB = { view: "notebook", only: false, notebook: null };
+$("#lab-btn").onclick = () => { focusEl.classList.add("on"); syncTabs(); setTab("lab"); setFocusCollapsed(false); };
+$("#lab-nav").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  LAB.view = b.dataset.l; document.querySelectorAll("#lab-nav button").forEach(x => x.classList.toggle("on", x === b)); renderLab();
+};
+function renderLab() {
+  ({ notebook: renderNotebook })[LAB.view]?.();
+}
+const when = ts => { const d = new Date(ts); return isNaN(d) ? "" : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toTimeString().slice(0, 5)}`; };
+const neuronChip = x => `<span class="chip nchip" data-l="${x.layer}" data-n="${x.n}" title="open this neuron">L${x.layer} N${x.n}</span>`;
+// the notebook: every saved experiment newest first; a prediction made before the run sits above its result
+async function renderNotebook() {
+  const el = $("#lab-body");
+  if (!LAB.notebook) el.innerHTML = `<div class="xnote dim">loading…</div>`;
+  let r;
+  try { r = await api("/api/notebook"); } catch (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; }
+  if (curTab() !== "lab" || LAB.view !== "notebook") return;
+  LAB.notebook = r.entries;
+  const preds = r.entries.filter(e => e.prediction), count = v => preds.filter(e => e.verdict === v).length;
+  const rows = (LAB.only ? preds : r.entries).map(e => `<div class="nb-row" data-id="${esc(e.id)}">
+      <div class="nb-meta mono"><span>${esc(when(e.timestamp))}</span>${e.neurons.slice(0, 3).map(neuronChip).join("")}${e.neurons.length > 3 ? `<span class="dim">+${e.neurons.length - 3}</span>` : ""}<span class="dim">${esc(e.kind)}</span></div>
+      <div class="nb-what">${esc(e.what)}</div>
+      ${e.prediction ? `<div class="xpred"><span class="xk">prediction</span><span class="ptxt">${esc(e.prediction)}</span>${verdictSeg(e.verdict, e.id)}</div>` : ""}
+      <div class="xline">${e.result ? esc(e.result) : `<span class="dim">no result line</span>`}</div></div>`).join("");
+  el.innerHTML = `<div class="nb-head"><span class="dim">${r.total} experiment${r.total === 1 ? "" : "s"} · ${preds.length} with a prediction${preds.length ? ` · ${VERDICTS.map(v => `${count(v)} ${v}`).join(" · ")}` : ""}</span>
+      <label class="xf"><input type="checkbox" id="nb-only"${LAB.only ? " checked" : ""}> only with a prediction</label></div>
+    <div class="xnote dim">A prediction is written before its run and can't be changed after, so this works as a light preregistration: the verdict is the only thing you set afterward.</div>
+    ${rows || `<div class="xnote dim">${LAB.only ? "No predictions yet: write one in the box above the chat input before a run." : "No experiments yet. Runs from the Chat tab land here."}</div>`}`;
+}
+$("#lab-body").addEventListener("click", e => {
+  if (e.target.id === "nb-only") { LAB.only = e.target.checked; renderNotebook(); return; }
+  const c = e.target.closest(".nchip"); if (c) { goToNeuron(+c.dataset.l, +c.dataset.n); return; }
+  const v = e.target.closest(".vseg[data-id] button[data-v]");
+  if (v) {
+    const id = v.parentElement.dataset.id, ent = LAB.notebook?.find(x => x.id === id), to = ent?.verdict === v.dataset.v ? null : v.dataset.v;
+    setVerdict(id, to).then(ok => {
+      if (!ok) return;
+      for (const t of state.thread) if (expIdOf(t) === id) { t.verdict = to; renderTurn(t); }
+      renderNotebook();
+    });
+  }
+});
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------
 const T = { sets: [], scores: {}, pending: new Set(), running: false };
@@ -1416,11 +1484,12 @@ async function runAblate() {
   if (!x.measure) { $("#status").textContent = "pick a measure before ablating"; return; }
   const prompt = $("#c-input").value.trim() || $("#c-input").placeholder, method = $("#x-method").value;
   const neurons = X.ablateSet && pinned.length ? pinned : [{ layer: f.layer, n: f.n }];
-  const t = { kind: "ablate", prompt, measure: x.measure, method, neurons, n: x.n, temperature: x.temperature, pick: 0, live: true };
+  const t = { kind: "ablate", prompt, measure: x.measure, method, neurons, n: x.n, temperature: x.temperature, pick: 0, live: true,
+              prediction: takePrediction() };
   state.thread.push(t); renderThread();
   let r;
   try { r = await api("/api/experiment/ablate", { layer: f.layer, n: f.n, neurons, prompt, measure: x.measure, method, samples: x.n,
-                                                   temperature: x.temperature, seed: x.seed, max_new: x.max_new }); }
+                                                   temperature: x.temperature, seed: x.seed, max_new: x.max_new, prediction: t.prediction }); }
   catch (err) { r = { error: err.message }; }
   if (r.error) { t.error = r.error; t.live = false; renderTurn(t); return; }
   X.job = { id: r.id, t };
@@ -1445,7 +1514,7 @@ function ablateHTML(t, i) {
   const prog = t.live ? `<div class="xnote dim">${t.means ? `computing every neuron's mean activation over web text, once: ${Math.round(t.means.done / 1000)}k / ${Math.round(t.means.total / 1000)}k tokens`
       : p ? `${p.done}/${p.total} replies · about ${Math.round(p.eta)} s left` : "starting…"} · <button type="button" class="x-cancel">cancel</button></div>`
     : t.cancelled ? `<div class="xnote dim">cancelled</div>` : "";
-  if (!S) return `<div class="turn ablate" data-i="${i}">${head}${prog}${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>`;
+  if (!S) return `<div class="turn ablate" data-i="${i}">${head}${prog}${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${predHTML(t)}</div>`;
   const picker = t.n > 1 ? `<div class="picker" role="group" aria-label="reply"><span class="xk" title="reply i used the same seed in both columns">reply</span>${Array.from({ length: t.n }, (_, s) =>
     `<button type="button" data-s="${s}" class="${s === t.pick ? "on" : ""}">${s + 1}</button>`).join("")}</div>` : "";
   const tips = ["the model as it is", "the neuron held at its " + (t.method === "mean" ? "mean activation" : "zero") + " on every token"];
@@ -1454,7 +1523,7 @@ function ablateHTML(t, i) {
   return `<div class="turn ablate" data-i="${i}">${head}${picker}<div class="cols two">${cols}</div>
     <div class="xline">${esc(S.columns[1].vs0.sentence)}</div>
     ${S.warn ? `<div class="xnote warn">${S.n} replies per column (under ${X.cfg?.warn_n ?? 5}), so these intervals are rough.</div>` : ""}
-    ${S.reproducible === false ? `<div class="xnote dim">Running on ${esc(S.device)}: the same seed may not reproduce this exact text.</div>` : ""}</div>`;
+    ${S.reproducible === false ? `<div class="xnote dim">Running on ${esc(S.device)}: the same seed may not reproduce this exact text.</div>` : ""}${predHTML(t)}</div>`;
 }
 
 async function runReads(f, text) {

@@ -1,0 +1,18 @@
+{
+  "name": "risk preference",
+  "kind": "choice",
+  "parameter": "certainty equivalent ($)",
+  "rate": "share choosing the gamble",
+  "template": "You must pick one of two options.\nA: {A}\nB: {B}\nWhich option do you pick? Answer with the letter A or B only.",
+  "options": {"x": "${sure} for sure", "y": "a {pct} chance of winning ${prize}, and nothing otherwise"},
+  "grid": {
+    "chance": [
+      {"p": 0.1, "pct": "10%"}, {"p": 0.25, "pct": "25%"}, {"p": 0.5, "pct": "50%"},
+      {"p": 0.75, "pct": "75%"}, {"p": 0.9, "pct": "90%"}
+    ],
+    "sure": [5, 15, 30, 50, 70, 85],
+    "prize": [100]
+  },
+  "fit": {"type": "risk", "sure": "sure", "prize": "prize", "p": "p", "reference": {"p": 0.5, "prize": 100}},
+  "method": "Each item sets a sure amount against a gamble on $100 at odds from 10% to 90%. The fit models the value of money as x^ρ and finds the ρ that best predicts when the model takes the gamble, then reports the certainty equivalent: the sure amount the model treats as worth the same as a 50% chance at $100. $50 is risk-neutral (the gamble's expected value); below $50 is risk-averse (it would rather have less, for sure); above $50 is risk-seeking. The share choosing the gamble is the plain, model-free version of the same thing."
+}

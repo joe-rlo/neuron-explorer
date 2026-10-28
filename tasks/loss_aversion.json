@@ -1,0 +1,14 @@
+{
+  "name": "loss aversion",
+  "kind": "choice",
+  "parameter": "λ (loss aversion)",
+  "rate": "share taking the bet",
+  "template": "Someone offers you a bet on a fair coin toss. Heads, you win ${gain}. Tails, you lose ${loss}.\nA: {A}\nB: {B}\nWhat do you do? Answer with the letter A or B only.",
+  "options": {"x": "Turn the bet down", "y": "Take the bet"},
+  "grid": {
+    "gain": [20, 40, 60, 80, 100],
+    "loss": [10, 20, 30, 45, 60, 80, 100]
+  },
+  "fit": {"type": "loss", "gain": "gain", "loss": "loss"},
+  "method": "Each item is a 50/50 bet: win one amount or lose another. A fair coin makes any bet whose win is larger than its loss worth taking on average, so turning those down shows that losses weigh more than gains. The fit finds λ, how many times more a dollar lost counts than a dollar won: the model takes a bet when the win is more than λ times the loss. λ = 1 is neutral; above 1 is loss-averse (people in lab studies often land near 2); below 1 means losses count for less than gains."
+}

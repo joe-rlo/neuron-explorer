@@ -159,12 +159,32 @@ def fit_hyperbolic(c, p, spec):
     return {"value": lk, "beta": beta, "at_bound": edge}
 
 
+def fit_risk(c, p, spec):
+    """Risk preference with power utility u(x) = x^rho: P(gamble) = sigmoid(beta * (p - (sure / prize)^rho)), the
+    gamble paying prize with probability p, else nothing. Returns the certainty equivalent of the reference gamble
+    (spec["reference"], e.g. a 50% chance at $100): prize * p^(1/rho). rho < 1 is risk averse, > 1 risk seeking."""
+    sure, prize, prob = (np.asarray(c[spec[k]], float) for k in ("sure", "prize", "p"))
+    pred = lambda lr: prob - (sure / prize) ** (10 ** lr[:, None])
+    lr, beta, edge = _logistic_grid(pred, p, np.linspace(-1, 1, 81))
+    ref = spec.get("reference", {"p": 0.5, "prize": 100})
+    return {"value": ref["prize"] * ref["p"] ** (1 / 10 ** lr), "rho": 10 ** lr, "beta": beta, "at_bound": edge}
+
+
+def fit_loss(c, p, spec):
+    """Loss aversion on 50/50 bets (win gain or lose loss): P(accept) = sigmoid(beta * (1 - lambda * loss / gain)).
+    Returns lambda, how many times a dollar lost outweighs a dollar won (1 = neutral)."""
+    gain, loss = (np.asarray(c[spec[k]], float) for k in ("gain", "loss"))
+    pred = lambda ll: 1 - 10 ** ll[:, None] * loss / gain
+    ll, beta, edge = _logistic_grid(pred, p, np.linspace(-1, 1.3, 93))
+    return {"value": 10 ** ll, "beta": beta, "at_bound": edge}
+
+
 def fit_mean(c, p, spec):
     """No model: the mean item value (a choice rate, or a mean rating)."""
     return {"value": float(p.mean())}
 
 
-FITS = {"hyperbolic": fit_hyperbolic, "mean": fit_mean}
+FITS = {"hyperbolic": fit_hyperbolic, "risk": fit_risk, "loss": fit_loss, "mean": fit_mean}
 
 
 def fit(task, c, p):

@@ -135,3 +135,45 @@ def test_bootstrap_paired_draws():
     assert np.array_equal(again["value"], b0["value"])  # fixed seed, fixed draws
     lo, hi = tk.ci(b1["value"] - b0["value"])
     assert lo > 0.3 and hi < 0.7  # a 0.5 shift in log k, paired
+
+
+RISK = {"kind": "choice", "fit": {"type": "risk", "sure": "sure", "prize": "prize", "p": "p", "reference": {"p": 0.5, "prize": 100}},
+        "grid": {"p": [0.1, 0.25, 0.5, 0.75, 0.9], "sure": [5, 15, 30, 50, 70, 85], "prize": [100]}}
+
+
+@pytest.mark.parametrize("rho", [0.5, 1.0, 1.8])
+def test_risk_recovers_certainty_equivalent(rho):
+    c = tk.columns(tk.expand(RISK))
+    p = sig(12 * (c["p"] - (c["sure"] / c["prize"]) ** rho))
+    f = tk.fit(RISK, c, p)
+    assert f["rho"] == pytest.approx(rho, rel=0.05)
+    assert f["value"] == pytest.approx(100 * 0.5 ** (1 / rho), abs=1.5)  # rho 1: $50, risk-neutral
+
+
+LOSS = {"kind": "choice", "fit": {"type": "loss", "gain": "gain", "loss": "loss"},
+        "grid": {"gain": [20, 40, 60, 80, 100], "loss": [10, 20, 30, 45, 60, 80, 100]}}
+
+
+@pytest.mark.parametrize("lam", [0.8, 1.0, 2.0, 3.0])
+def test_loss_aversion_recovers_lambda(lam):
+    c = tk.columns(tk.expand(LOSS))
+    p = sig(6 * (1 - lam * c["loss"] / c["gain"]))
+    f = tk.fit(LOSS, c, p)
+    assert f["value"] == pytest.approx(lam, rel=0.04) and not f["at_bound"]
+
+
+def test_loss_aversion_noisy():
+    c = tk.columns(tk.expand(LOSS))
+    p = np.clip(sig(6 * (1 - 2.0 * c["loss"] / c["gain"])) + np.random.default_rng(1).normal(0, 0.05, 35), 0, 1)
+    assert tk.fit(LOSS, c, p)["value"] == pytest.approx(2.0, rel=0.12)
+
+
+def test_shipped_tasks_load_and_fill():
+    """Every task in tasks/ expands, fills its template without missing fields, and names a known fit."""
+    ts = tk.load()
+    assert {t["id"] for t in ts} >= {"delay_discounting", "risk", "loss_aversion"}
+    for t in ts:
+        assert t["fit"]["type"] in tk.FITS and t["method"] and t["parameter"]
+        for it in tk.expand(t):
+            for s in tk.prompts(t, it):
+                assert "{" not in s and "}" not in s

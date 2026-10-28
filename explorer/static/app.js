@@ -1727,6 +1727,80 @@ const CHAPTERS = [
           <span class="mono${x.top[0][0] === r.answer ? " ln-ans" : ""}">${lnTok(x.top[0][0])}</span><span class="mono dim">${lnPct(x.top[0][1])}</span>
           <span class="ln-meter"><i style="width:${Math.max(0.5, x.final * 100)}%"></i></span></div>`).join("")}</div>`;
     } },
+  { id: "attention", title: "Looking back: attention",
+    text: "So far each token's vector has moved on its own. <b>Attention</b> is how tokens share information: at a layer, each token can look back at the earlier tokens and copy in what it needs, so “she” can pull in “Alice”, or “sat” can check who is sitting. A layer has many <b>heads</b>, each looking for something different. A token can only look back, never ahead, because the model writes left to right.",
+    real: a => `Full attention: each head makes queries <code>Q</code>, keys <code>K</code> and values <code>V</code> from the residual and outputs <code>softmax(QKᵀ / √d_k) · V</code>, with a causal mask so token <code>i</code> only sees tokens <code>j ≤ i</code>. Qwen3.5 is a hybrid: ${a.layer_types ? a.layer_types.filter(t => t === "full_attention").length : 8} of its ${a.n_layers || 32} layers use full attention and the rest use <b>linear attention</b> (Gated DeltaNet), which keeps a fixed-size running state instead of weighing every past token. Heads often park spare weight on the first token (the <b>attention sink</b>), so that token is left out when picking heads to show.`,
+    key: "Pick a word. Below are the 3 heads, from the layers with full attention, whose attention from that word lands hardest on one earlier word. The shading shows how much weight each earlier token gets; the selected word is outlined.",
+    tryit: "Type “Alice gave Bob the book because she” and pick “she”. Do any heads look back at Alice or Bob?",
+    quiz: { q: "Can a token attend to a word that comes after it?", a: 1,
+      options: ["Yes, every token sees the whole sentence", "No, attention only looks back at earlier tokens", "Only in the last layer"],
+      why: "The model writes one token at a time, so when a token is processed the words after it don't exist yet; a causal mask enforces this." },
+    async live(el, g) {
+      const t = await lnTokens(); if (g !== LN.gen) return;
+      const at = pickOf("attention", t.tokens, t.tokens.length - 1);
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="xnote dim">finding heads…</div>`;
+      const key = `att/${LN.text}/${at}`, r = LN.cache[key] ||= await api("/api/learn/attention", { text: LN.text, pos: at }); if (g !== LN.gen) return;
+      if (at === 0) { el.innerHTML = tokPicker(t.tokens, at) + `<div class="xnote dim">The first token has nothing earlier to look at. Pick a later word.</div>`; return; }
+      const h = r.heads[Math.min(LN.head || 0, r.heads.length - 1)];
+      el.innerHTML = tokPicker(t.tokens, at) + `<div class="lab">heads reading back from ${lnTok(r.tokens[at])}, out of ${r.full_layers * r.heads_per_layer} in the ${r.full_layers} full-attention layers</div>
+        <div class="seg ln-heads">${r.heads.map((x, i) => `<button type="button" data-h="${i}" class="${x === h ? "on" : ""}">L${x.layer} head ${x.head}</button>`).join("")}</div>
+        <div class="ln-toks ln-att">${r.tokens.slice(0, at + 1).map((s, i) => `<span class="ln-tok${i === at ? " q" : ""}" style="background:rgba(56,200,255,${(i === at ? 0 : Math.min(0.9, h.row[i] * 1.1)).toFixed(3)});${h.row[i] > 0.45 && i !== at ? "color:#000" : ""}"><b>${lnTok(s)}</b><small>${i === at ? "here" : lnPct(h.row[i])}</small></span>`).join("")}</div>
+        <div class="xnote dim">${h.row[0] > 0.3 ? `This head also parks ${lnPct(h.row[0])} on the first token, the attention sink.` : ""}</div>`;
+    } },
+  { id: "neurons", title: "Neurons: detectors and writers",
+    text: "After attention, each layer runs its <b>MLP</b>: 9,216 neurons per layer, 294,912 in all. Each neuron checks the running vector for a pattern and fires when it finds one, and when it fires it adds its own fixed direction back into the vector. So a neuron is both a <b>detector</b> (what makes it fire) and a <b>writer</b> (what it pushes toward). The map now lights up the neurons that fire hardest on your sentence.",
+    real: () => `Qwen's MLP is gated: <code>a = silu(W_gate·x) ⊙ (W_up·x)</code> gives one value per neuron, and the layer writes <code>W_down·a</code>, so neuron <code>n</code> adds <code>a_n</code> times column <code>n</code> of <code>W_down</code>. The words beside a neuron are its <b>logit lens</b>: that column read through the unembedding, <code>W_U · norm(W_down[:, n])</code>. “Fires” here is the activation divided by the neuron's usual peak on web text.`,
+    key: "Each row is a neuron: its layer and number, the token it fired hardest on, how hard (compared with its usual peak, so above 1 is unusually strong) and the words its direction pushes toward. Click one to open it. The lit dots on the map are all the neurons above the threshold, the same list as the run panel on the left.",
+    tryit: "Rewrite the sentence about food, code or a city and see which neurons change. Open one and read its Details tab.",
+    quiz: { q: "What does a neuron do when it fires?", a: 2,
+      options: ["It picks the next word by itself", "It removes earlier words from the sentence", "It adds its own direction to the running vector"],
+      why: "A neuron's output is a fixed direction scaled by how hard it fires, added into the residual stream for later layers to read." },
+    async live(el, g) {
+      $('#q-mode button[data-q="fires"]').click();
+      $("#lens-q").value = LN.text; $("#inf-text").value = LN.text; showLeft("run");
+      await runLensSearch(); if (g !== LN.gen) return;
+      const rs = fireResults?.results;
+      if (!rs) { el.innerHTML = `<div class="xnote dim">${esc(state.statusText || "The neurons' usual ranges are still being measured; try again in a minute.")}</div>`; return; }
+      el.innerHTML = `<div class="lab">${lnInt(fireResults.total)} neurons fire above their threshold on this sentence · the strongest:</div>
+        <table class="dtable ln-fires">${rs.slice(0, 10).map(x => `<tr><td>${neuronChip(x)}</td><td class="mono">${lnTok(x.token)}</td>
+          <td class="mono ${x.sign === "+" ? "up" : "down"}">${x.sign === "+" ? "" : "−"}${x.score}×</td><td class="mono dim">${esc(x.name || x.lens.slice(0, 4).join(" "))}</td></tr>`).join("")}</table>`;
+    } },
+  { id: "next", title: "Choosing the next word",
+    text: "After the last layer, the model scores every token in its vocabulary and turns the scores into <b>probabilities</b>. Then it picks one, adds it to the text and runs everything again for the word after. That is all generation is: one token at a time. <b>Temperature</b> sets how adventurous the pick is: low almost always takes the top choice, high spreads the chances out.",
+    real: () => `The logits are <code>z = W_U · norm(h(L))</code> and the probabilities <code>p = softmax(z / T)</code>, i.e. <code>pᵢ = e^(zᵢ/T) / Σⱼ e^(zⱼ/T)</code>. <code>T → 0</code> is <b>greedy decoding</b> (always the argmax), <code>T = 1</code> is the model's own distribution, and <code>T &gt; 1</code> flattens it. <b>Sampling</b> draws one token from <code>p</code>.`,
+    key: "The 10 likeliest next tokens and the chance left for everything else, at this temperature. Sample draws one token from the whole distribution; add puts it on the end of your sentence, which reruns every chapter.",
+    tryit: "Sample a few times at 0.2, then at 1.5. Add a word and watch the next guesses change.",
+    quiz: { q: "What does raising the temperature do?", a: 0,
+      options: ["Moves probability toward less likely words", "Makes the model more accurate", "Changes the model's weights"],
+      why: "Dividing the scores by a larger T shrinks the gaps between them, so the softmax spreads probability more evenly." },
+    async live(el, g) {
+      const T = LN.temp ??= 1;
+      const r = await api("/api/learn/next", { text: LN.text, temperature: T }); if (g !== LN.gen) return;
+      const top = r.top[0][1] || 1, samples = (LN.samples?.text === LN.text ? LN.samples.list : []);
+      // the controls are drawn once, so a slider being dragged is never replaced under the pointer
+      if (!el.querySelector("#ln-t")) el.innerHTML = `<div class="ln-temp"><span class="lab">temperature</span><input type="range" id="ln-t" min="0.1" max="2" step="0.1" value="${T}"><b class="mono">${T.toFixed(1)}</b>
+          <button type="button" class="xbtn" id="ln-sample">sample</button></div><div class="ln-out"></div>`;
+      el.querySelector(".ln-out").innerHTML = `<div class="lab">after “${esc(LN.text.slice(-40))}”</div>
+        <div class="ln-bars">${r.top.map(([s, p]) => `<div class="ln-bar"><span class="mono">${lnTok(s)}</span><i style="width:${Math.max(0.5, p / top * 100)}%"></i><b class="mono">${lnPct(p)}</b></div>`).join("")}
+          <div class="ln-bar dim"><span>everything else</span><span></span><b class="mono">${lnPct(r.rest)}</b></div></div>
+        ${samples.length ? `<div class="ln-samples"><span class="lab">sampled</span>${samples.map((s, i) => `<button type="button" class="ln-tok" data-add="${i}" title="add to the sentence">${lnTok(s.tok)} <small class="dim">T ${s.t.toFixed(1)}</small></button>`).join("")}<span class="dim">click one to add it</span></div>` : ""}`;
+    } },
+  { id: "steer", title: "Steering: change one neuron",
+    text: "Because a neuron writes a fixed direction, we can write it ourselves: push the neuron at every word and see what the model says. This is <b>L22 N2742</b>, a neuron whose direction leans toward words like “alien” and “extra”. Push it while the model answers “Who are you?” and compare with the normal answer. A small push nudges the topic; too big a push breaks the text.",
+    real: () => `Steering adds <code>d · s · ŵ</code> to the residual leaving layer 22 at every position, where <code>ŵ</code> is the neuron's <code>W_down</code> column as a unit vector and <code>s</code> is the median size of that residual, so the dose <code>d</code> is a fraction of a typical residual. Pushing toward 1 and beyond starts to overwrite what was there, and the text falls apart.`,
+    key: "Three answers to “Who are you?”: pushed up, normal, and pushed the other way. All use greedy decoding, so the push is the only difference.",
+    tryit: "Try 0.3, 0.7 and 1.2. Where does the topic change, and where does the text break? Then open the neuron to run real experiments in Chat and the Lab.",
+    quiz: { q: "Why is the normal answer the same every time you run it here?", a: 1,
+      options: ["The model remembers its last answer", "Greedy decoding always takes the top token, so nothing is random", "The push is always zero"],
+      why: "With temperature 0 the model always takes its single most likely token, so the same input always gives the same text." },
+    async live(el, g) {
+      const d = LN.dose ??= 0.6, key = `steer/${d}`, out = LN.cache[key];
+      const col = (r, label) => `<div class="ln-col"><div class="lab">${label}</div><div class="ln-reply">${esc(out?.[r] || "")}${out && !out.done ? "▍" : ""}</div></div>`;
+      if (!el.querySelector("#ln-d")) el.innerHTML = `<div class="ln-temp"><span class="lab">push</span><input type="range" id="ln-d" min="0.1" max="1.5" step="0.1" value="${d}"><b class="mono">${d.toFixed(1)}</b>
+          <button type="button" class="xbtn" id="ln-steer"></button><button type="button" class="xbtn" id="ln-open">open L22 N2742 in Chat ›</button></div><div class="ln-out"></div>`;
+      el.querySelector("#ln-steer").textContent = out && !out.done ? "running…" : out ? "run again" : "run";
+      el.querySelector(".ln-out").innerHTML = `${out ? col(0, `pushed +${d.toFixed(1)}`) + col(1, "normal") + col(2, `pushed −${d.toFixed(1)}`) : `<div class="xnote dim">Press run to generate the three answers (about 10 seconds).</div>`}`;
+    } },
 ];
 
 function renderLearn() {
@@ -1777,6 +1851,52 @@ $("#ln-body").addEventListener("click", e => {
     $(".ln-fb").innerHTML = ok ? `Right. ${esc(c.quiz.why)}` : "Not quite. Try another answer.";
     if (ok && !LN.done.has(c.id)) { LN.done.add(c.id); saveLearn(); $(`#ln-nav button[data-c="${LN.ch}"]`).textContent = "✓"; }
   }
+});
+
+// chapter 7's three answers stream in; each delta repaints only the chapter's live picture
+async function learnSteer() {
+  const d = LN.dose, key = `steer/${d}`, out = LN.cache[key] = { 0: "", 1: "", 2: "", done: false };
+  LN.steerCtl?.abort(); const ctl = LN.steerCtl = new AbortController();
+  const paint = () => { if (CHAPTERS[LN.ch].id === "steer" && curTab() === "learn") renderLearnLive(); };
+  paint();
+  try {
+    const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
+      body: JSON.stringify({ layer: 22, n: 2742, prompt: "Who are you?", dose: d, mode: "add", samples: 1, temperature: 0, max_new: 70 }) });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
+    let last = 0;
+    await sse(res, ev => {
+      if (ev.error) out[1] = ev.error;
+      if (ev.row == null) return;
+      out[ev.row] += ev.t;
+      if (performance.now() - last > 120) { last = performance.now(); paint(); }
+    });
+  } catch (err) { if (err.name !== "AbortError") out[1] = String(err.message || err); }
+  out.done = true; paint();
+}
+let lnTempTimer;
+$("#ln-body").addEventListener("input", e => {
+  if (e.target.id === "ln-t") {
+    LN.temp = +e.target.value; e.target.nextElementSibling.textContent = LN.temp.toFixed(1);
+    clearTimeout(lnTempTimer); lnTempTimer = setTimeout(renderLearnLive, 120);
+  }
+  if (e.target.id === "ln-d") { LN.dose = +e.target.value; e.target.nextElementSibling.textContent = LN.dose.toFixed(1); renderLearnLive(); }
+});
+$("#ln-body").addEventListener("click", async e => {
+  const hb = e.target.closest("[data-h]"); if (hb) { LN.head = +hb.dataset.h; return renderLearnLive(); }
+  const nc = e.target.closest(".nchip"); if (nc) return goToNeuron(+nc.dataset.l, +nc.dataset.n);
+  if (e.target.id === "ln-sample") {
+    const r = await api("/api/learn/next", { text: LN.text, temperature: LN.temp ?? 1, sample: true });
+    if (LN.samples?.text !== LN.text) LN.samples = { text: LN.text, list: [] };
+    LN.samples.list = [{ tok: r.sampled, t: r.temperature }, ...LN.samples.list].slice(0, 8);
+    return renderLearnLive();
+  }
+  const add = e.target.closest("[data-add]");
+  if (add) {
+    LN.text += LN.samples.list[+add.dataset.add].tok; LN.pick = {}; saveLearn();
+    $("#ln-text").value = LN.text; return renderLearnLive();
+  }
+  if (e.target.id === "ln-steer" && !(LN.cache[`steer/${LN.dose}`] && !LN.cache[`steer/${LN.dose}`].done)) return learnSteer();
+  if (e.target.id === "ln-open") { goToNeuron(22, 2742); setTab("chat"); }
 });
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------

@@ -576,3 +576,20 @@ button.ln-tok.on { background: var(--link); color: #000; }
 .ln-fb { margin-top: 8px; min-height: 1.4em; color: var(--dim); }
 .ln-foot { display: flex; justify-content: space-between; gap: 10px; margin: 16px 0 8px; }
 .ln-foot .xbtn { margin-top: 0; }
+.ln-heads { margin-bottom: 10px; }
+.ln-att .ln-tok { display: inline-flex; flex-direction: column; align-items: center; padding: 5px 8px; }
+.ln-att .ln-tok b { font-weight: 500; font-size: 13px; }
+.ln-att .ln-tok small { font-size: 10px; opacity: 0.8; margin-top: 2px; }
+.ln-att .ln-tok.q { outline: 1px solid var(--ink); }
+.ln-fires td { padding: 2px 10px 2px 0; font-size: 12px; white-space: pre; }
+.ln-fires td:last-child { white-space: normal; }
+.ln-fires .up { color: var(--up); }
+.ln-fires .down { color: var(--down); }
+.ln-temp { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.ln-temp .lab { margin: 0; }
+.ln-temp input[type=range] { width: 160px; padding: 0; background: none; }
+.ln-temp .xbtn { margin-top: 0; }
+.ln-samples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: 12px; }
+.ln-samples .lab { margin: 0; }
+.ln-col { margin-bottom: 10px; }
+.ln-reply { white-space: pre-wrap; font-size: 13px; background: rgba(0,0,0,0.25); border-radius: 4px; padding: 8px 10px; min-height: 2.4em; }

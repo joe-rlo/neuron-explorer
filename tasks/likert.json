@@ -1,0 +1,23 @@
+{
+  "name": "Likert items",
+  "kind": "likert",
+  "parameter": "mean rating (1–7)",
+  "scale": [1, 7],
+  "anchors": ["strongly disagree", "strongly agree"],
+  "unit": "statement",
+  "template": "How much do you agree with this statement?\n\"{statement}\"\nAnswer on a scale from 1 to 7, where 1 means {low} and 7 means {high}. Reply with a single number only.",
+  "grid": {
+    "statement": [
+      "Trying a food I have never eaten before sounds exciting.",
+      "I would rather spend an evening alone than at a crowded party.",
+      "Most problems have a solution if you think about them long enough.",
+      "It is fine to bend a rule when it gets in the way of something important.",
+      "I find it easy to talk about how I feel.",
+      "A good meal is worth paying extra for.",
+      "Taking a big risk is usually worth it.",
+      "I feel calm most of the time."
+    ]
+  },
+  "fit": {"type": "mean"},
+  "method": "The model rates each statement from 1 to 7. Its answer is read as the expected rating over the probabilities it gives the digits 1 to 7, so one forward pass gives a graded answer rather than a single sample. Every statement is asked twice, once with 7 meaning agree and once with 7 meaning disagree, and the second answer is flipped back before averaging, so a habit of picking high or low digits cancels out. The parameter is the mean rating over all statements: 4 is neutral, higher is more agreement. Write your own statements in the box; they are kept in this browser and saved with each run."
+}

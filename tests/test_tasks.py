@@ -190,3 +190,11 @@ def test_framing_difference_and_whole_scenario_resampling():
     f, boots = tk.bootstrap(t, items, p, B=200, seed=0)
     assert f["value"] == pytest.approx(0.4)
     assert np.allclose(boots["value"], 0.4)  # whole scenarios resample, so the offsets never leak into the difference
+
+
+def test_likert_mean_rating_and_statement_resampling():
+    t = tk.get("likert")
+    items = tk.expand(t, ["Rain is nice.", "Mornings are hard."])
+    f, boots = tk.bootstrap(t, items, [6.0, 2.0], B=200, seed=0)
+    assert f["value"] == pytest.approx(4.0)
+    assert set(np.round(boots["value"], 6)) <= {2.0, 4.0, 6.0}

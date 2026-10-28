@@ -1193,14 +1193,19 @@ async function loadTasks() {
 }
 let likert = {}; try { likert = JSON.parse(localStorage.getItem("ne.likert") || "{}"); } catch {}
 const statementsOf = k => likert[k.id] || k.grid.statement;
-// the methods note, and for a Likert task its statements (one per line, kept in this browser)
+// the methods note, and for a Likert task its statements: one line until opened, then one per line, kept in this browser
+let editStatements = false;
 function renderTaskNote() {
   const k = curTask(), el = $("#x-task-note"), open = $("#x-task-how").getAttribute("aria-expanded") === "true";
   el.hidden = !k || (!open && k.kind !== "likert");
   if (el.hidden) return;
+  const n = k.kind === "likert" ? statementsOf(k).length : 0;
   el.innerHTML = (open ? `<p class="method">${esc(k.method)}</p>` : "")
-    + (k.kind === "likert" ? `<label class="xk" for="x-statements">statements, one per line</label><textarea id="x-statements" rows="5" spellcheck="false">${esc(statementsOf(k).join("\n"))}</textarea>` : "");
+    + (!n && k.kind !== "likert" ? "" : editStatements
+      ? `<label class="xk" for="x-statements">statements, one per line · <button type="button" id="x-st-edit" class="dim">done</button></label><textarea id="x-statements" rows="5" spellcheck="false">${esc(statementsOf(k).join("\n"))}</textarea>`
+      : `<div><button type="button" id="x-st-edit" class="dim" title="the statements the model rates; yours are kept in this browser">${n} statement${n === 1 ? "" : "s"} · edit</button></div>`);
 }
+$("#x-task-note").addEventListener("click", e => { if (e.target.id === "x-st-edit") { editStatements = !editStatements; renderTaskNote(); } });
 $("#x-task").onchange = () => { try { localStorage.setItem("ne.task", $("#x-task").value); } catch {} renderTaskNote(); };
 $("#x-task-how").onclick = () => {
   const b = $("#x-task-how"); b.setAttribute("aria-expanded", String(b.getAttribute("aria-expanded") !== "true")); renderTaskNote();
@@ -1216,7 +1221,7 @@ async function runTask() {
   const statements = k.kind === "likert" ? statementsOf(k) : null;
   if (statements && !statements.length) { $("#status").textContent = "write at least one statement to rate"; return; }
   const doses = X.cfg.sweep_doses;
-  const t = { kind: "task", task: k, layer: f.layer, neuron: f.n, doses: [...new Set([...doses, 0])].sort((a, b) => a - b),
+  const t = { kind: "task", task: k, statements, layer: f.layer, neuron: f.n, doses: [...new Set([...doses, 0])].sort((a, b) => a - b),
               measure: { name: k.parameter, type: "task" }, points: {}, live: true, progress: null };
   state.thread.push(t); renderThread();
   let r;
@@ -1264,8 +1269,17 @@ function taskHTML(t) {
     `<div class="xline">${fmtDose(q.dose)}: ${esc(k.parameter)} ${num(q.param.mean)} ${ivl(q.param.ci)}${k.rate ? ` · ${esc(k.rate)} ${pct(q.rate.mean)} [${pct(q.rate.ci[0])}, ${pct(q.rate.ci[1])}]` : ""}${q.vs0 ? `<span class="dim"> · ${esc(q.vs0.sentence)}</span>` : ""}</div>`).join("");
   const repro = t.reproducible === false ? `<div class="xnote dim">Running on ${esc(t.device)}: the same inputs may give slightly different probabilities elsewhere.</div>` : "";
   return head + prog + plot + (t.window ? windowHTML(t.window, name, name, "answers") : "") + edge + bias + (t.error ? `<div class="err">${esc(t.error)}</div>` : "")
-    + (lines ? `<details class="xsent"><summary class="dim">each dose</summary>${lines}</details>` : "")
+    + (lines ? `<details class="xsent"><summary class="dim">each dose</summary>${lines}</details>` : "") + statementsHTML(t)
     + `<details class="xsent"><summary class="dim">how to read this</summary><div class="xline method">${esc(k.method)}</div></details>` + repro;
+}
+
+// a Likert run's statements, each with its rating at every dose so far (flipped back where 7 meant disagree)
+function statementsHTML(t) {
+  const ds = Object.keys(t.points).map(Number).sort((a, b) => a - b);
+  if (!t.statements || !ds.length) return "";
+  const head = `<tr><th></th>${ds.map(d => `<th>${fmtDose(d)}</th>`).join("")}</tr>`;
+  const rows = t.statements.map((s, j) => `<tr><td>${esc(s)}</td>${ds.map(d => `<td>${num(t.points[d].items[j])}</td>`).join("")}</tr>`).join("");
+  return `<details class="xsent"><summary class="dim">each statement</summary><table class="xstat">${head}${rows}</table></details>`;
 }
 
 // ---------- tuning curves: a stimulus set's items, each neuron's response per item, two selectivity scores ----------

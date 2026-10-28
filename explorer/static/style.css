@@ -369,6 +369,10 @@ tr.con .logit .tok { font-size: 10.5px; }
 #x-task-note { margin: 8px 0 0 calc(4.6em + 10px); display: grid; gap: 6px; }
 #x-task-note[hidden] { display: none; }
 #x-task-note .method, .xline.method { font-size: 12px; line-height: 1.5; color: var(--dim); margin: 0; }
+.xstat { border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.xstat th { font: 10.5px var(--mono); color: var(--faint); font-weight: normal; padding: 2px 6px; text-align: right; }
+.xstat td { padding: 3px 6px; vertical-align: top; }
+.xstat td + td { font: 11.5px var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
 #x-task-note textarea { width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.3); border: 0; border-radius: 4px; padding: 6px 8px; color: inherit; font: 12px var(--mono); resize: vertical; }
 .xs { font: 11px/1.5 var(--mono); font-variant-numeric: tabular-nums; white-space: normal; margin-bottom: 8px; color: var(--ink); }
 .xs > div { display: grid; grid-template-columns: minmax(0, 6.2em) 1fr; gap: 6px; }

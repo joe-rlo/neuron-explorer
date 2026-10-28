@@ -63,6 +63,8 @@ class Runtime:
         self._capture_heads = None  # while set: each layer's query/key side and each head's write size, per token
         self.heads = None  # the last text's captures: {"T", "q", "writes"}, see full_activations(heads=True)
         self._lens_cache = {}
+        self._capture_resid = None  # while set: each layer's output residual for the whole text, {layer: [T, hidden]}
+        self._embed_norm = None
 
     # ---------- loading ----------
     def ensure_loaded(self):
@@ -544,9 +546,11 @@ class Runtime:
 
     def _resid_hook(self, i):
         def hook(mod, inp, out):
+            h = out[0] if isinstance(out, tuple) else out
             if self._seen.get("want_resid") == i:
-                h = out[0] if isinstance(out, tuple) else out
                 self._seen["resid"] = h[0, 1:].float().norm(dim=-1).cpu()
+            if self._capture_resid is not None:
+                self._capture_resid[i] = h[0]
         return hook
 
     def layer_resid_p50(self, layer):
@@ -785,6 +789,33 @@ class Runtime:
             return base, None
         push = [self._push_entry(pl, pn, d, m, (1,)) for pl, pn, d, m in pushes or []] or None
         return base, run(push, list(heads) if heads else None)
+
+    # ---------- learn mode ----------
+    def resid_lens(self, ids, pos=-1):
+        """The logit lens on the residual stream: the residual after each layer at token `pos`, read through the final
+        norm and the unembedding, i.e. what the model would predict if it stopped at that layer. Returns log-probs
+        [L, vocab] as numpy; the last row is the model's real prediction."""
+        self.ensure_loaded()
+        with self.lock, torch.inference_mode():
+            self._capture_resid = {}
+            try:
+                self.lm(input_ids=torch.tensor([ids], device=self.dev), use_cache=False)
+                h = torch.stack([self._capture_resid[i][pos] for i in range(len(self.lm.layers))])  # [L, hidden]
+            finally:
+                self._capture_resid = None
+            return torch.log_softmax(self.model.lm_head(self.lm.norm(h)).float(), -1).cpu().numpy()
+
+    def embed_neighbors(self, tid, k=60):
+        """The k tokens whose input embeddings point the most nearly the same way as token `tid`'s: [(id, cosine)],
+        best first (the token itself included)."""
+        self.ensure_loaded()
+        with self.lock, torch.inference_mode():
+            E = self.lm.embed_tokens.weight
+            if self._embed_norm is None:  # in chunks: the whole matrix in float32 would be 2.5 GB
+                self._embed_norm = torch.cat([E[i:i + 16384].float().norm(dim=-1) for i in range(0, E.shape[0], 16384)])
+            sims = (E @ E[tid]).float() / (self._embed_norm * self._embed_norm[tid]).clamp(min=1e-6)
+            v, i = sims.topk(k)
+            return list(zip(i.tolist(), v.tolist()))
 
     def con_index(self):
         """Precomputed connections (build_connections.py), loaded once."""

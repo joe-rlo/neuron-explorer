@@ -25,6 +25,7 @@ from runtime import CACHE, NO_MODEL, Runtime  # noqa: E402
 import experiment as exm  # noqa: E402
 import tasks as tk  # noqa: E402
 import lab  # noqa: E402
+import learn  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 NAMES = os.path.join(ROOT, "explorer", "names.json")
@@ -1292,6 +1293,106 @@ def lens_index():
         z = np.load(LENS_INDEX)
         _lens["up"], _lens["down"] = z["up"], z["down"]
     return _lens if "up" in _lens else None
+
+
+# ---------- learn ----------
+# The Learn tab's chapters. Every position is a raw token index into the text (no chat template), the same tokens the
+# first chapter shows.
+LEARN_MAX_TOKENS = 64
+_learn_next = {}  # the last text's next-token log-probs, so moving the temperature slider doesn't rerun the model
+
+
+def _learn_ids(text):
+    rt.ensure_loaded()
+    return rt.tok(text, add_special_tokens=False).input_ids[:LEARN_MAX_TOKENS]
+
+
+@app.post("/api/learn/tokens")
+async def learn_tokens(req: Request):
+    """A text split into the model's tokens: [[id, token string]] and the vocabulary size."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    ids = await asyncio.to_thread(_learn_ids, b["text"])
+    v = await asyncio.to_thread(rt.vocab_strings)
+    return {"tokens": [[i, v[i]] for i in ids], "vocab": len(rt.tok)}
+
+
+@app.post("/api/learn/neighbors")
+async def learn_neighbors(req: Request):
+    """The tokens nearest one token in embedding space, by cosine, case and spacing variants folded together."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    tid = int(b["id"])
+    hits = await asyncio.to_thread(rt.embed_neighbors, tid)
+    v = await asyncio.to_thread(rt.vocab_strings)
+    return {"token": v[tid], "hidden": ARCH["hidden"], "neighbors": learn.neighbors(v[tid], [(v[i], c) for i, c in hits])}
+
+
+@app.post("/api/learn/lens")
+async def learn_lens(req: Request):
+    """The logit lens down the layers at one token (default the last): each layer's top guesses for the next token."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    ids = await asyncio.to_thread(_learn_ids, b["text"])
+    if not ids:
+        return {"error": "empty text"}
+    pos = int(b.get("pos", -1)) % len(ids)
+    lp = await asyncio.to_thread(rt.resid_lens, ids, pos)
+    v = await asyncio.to_thread(rt.vocab_strings)
+    return {"pos": pos, "token": v[ids[pos]], "types": ARCH["layer_types"], **learn.lens_rows(lp, v)}
+
+
+@app.post("/api/learn/attention")
+async def learn_attention(req: Request):
+    """Where one token looks back: over the full (softmax) attention layers, the heads whose weights at token `pos`
+    land hardest on one earlier word, each with its weights on every token up to pos."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    ids = await asyncio.to_thread(_learn_ids, b["text"])
+    if not ids:
+        return {"error": "empty text"}
+    pos = int(b.get("pos", -1)) % len(ids)
+
+    def work():
+        rt.full_activations(ids, True)
+        caps, rows = rt.heads, []
+        for l, kind in enumerate(ARCH["layer_types"]):
+            if kind == "full_attention":
+                A = rt.layer_patterns(l, caps)  # [H, T, T]
+                rows += [(l, h, A[h, pos, :pos + 1].tolist()) for h in range(A.shape[0])]
+        return rows
+    rows = await asyncio.to_thread(work)
+    v = await asyncio.to_thread(rt.vocab_strings)
+    full = ARCH["layer_types"].count("full_attention")
+    return {"pos": pos, "tokens": [v[i] for i in ids], "heads": learn.best_heads(rows, pos),
+            "full_layers": full, "layers": ARCH["n_layers"], "heads_per_layer": ARCH["attn_heads"]}
+
+
+@app.post("/api/learn/next")
+async def learn_next(req: Request):
+    """The next token's distribution after a text at a temperature: the top 10 and the rest. With sample, also one
+    token drawn from the whole distribution."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    text, t = b["text"], float(b.get("temperature", 1.0))
+    if text not in _learn_next:
+        ids = await asyncio.to_thread(_learn_ids, text)
+        if not ids:
+            return {"error": "empty text"}
+        base, _ = await asyncio.to_thread(rt.next_logprobs, text, False)
+        _learn_next.clear()
+        _learn_next[text] = base.numpy()
+    v = await asyncio.to_thread(rt.vocab_strings)
+    p = learn.at_temperature(_learn_next[text], t)
+    out = {"temperature": t, **learn.top_next(p, v)}
+    if b.get("sample"):
+        out["sampled"] = v[int(np.random.default_rng().choice(len(p), p=p))]
+    return out
 
 
 @app.get("/api/search")

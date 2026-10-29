@@ -314,8 +314,23 @@ export function createMap(canvas, labelsDiv, arch, cb) {
 
   // annotations: short HTML labels pinned to neurons, re-projected every frame (Claude points things out with these)
   let notes = [];
+  // the open neuron (or head) is marked with a ring that keeps its size on screen and its id beside it, so it can be
+  // found at any zoom; the ring pulses when something new opens
+  const selEl = document.createElement("div"); selEl.className = "sel-mark";
+  const selText = document.createElement("span"); selEl.appendChild(selText); labelsDiv.appendChild(selEl);
+  let selLabel = null;  // {layer, n, text}: a name to show for that neuron when it is the open one
+  function placeSel(w, h) {
+    const at = selected ? { layer: selected.layer, v: neuronPos(selected.layer, selected.n) } : headSel ? { layer: headSel.layer, v: headMid(headSel.layer, headSel.head) } : null;
+    const v = at && at.v.project(camera);
+    if (!at || v.z > 1 || layerMode !== null && at.layer !== layerMode) { selEl.style.display = "none"; return; }
+    selEl.style.display = ""; selEl.style.left = `${(v.x + 1) / 2 * w}px`; selEl.style.top = `${(1 - v.y) / 2 * h}px`;
+    const named = selected && selLabel && selLabel.layer === selected.layer && selLabel.n === selected.n && selLabel.text;
+    selText.textContent = selected ? `L${selected.layer} N${selected.n}${named ? ` · ${named}` : ""}` : `L${headSel.layer} h${headSel.head}`;
+  }
+  function pulseSel() { selEl.classList.remove("pulse"); void selEl.offsetWidth; selEl.classList.add("pulse"); }
   function placeNotes() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
+    placeSel(w, h);
     for (const a of notes) {
       const v = neuronPos(a.layer, a.n).project(camera);
       a.el.style.display = v.z > 1 || layerMode !== null && a.layer !== layerMode ? "none" : "";
@@ -584,6 +599,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     setHeadLevels(levels) { headLevels = levels; paintHeads(); render(); },
     selectHead(layer, head) {
       headSel = layer == null ? null : { layer, head };
+      if (headSel) pulseSel();
       if (!headSel && headSrc) { headSrc = null; connections = []; refreshHighlights(); }
       paintHeads(); render();
     },
@@ -635,6 +651,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     select(layer, n, fly = true) {
       selected = layer == null ? null : { layer, n };
       connections = []; headSrc = null; neuronHeads = [];
+      if (selected) pulseSel();
       refreshHighlights();
       if (!fly || layer == null || layerMode !== null) return;
       // off screen (or behind the camera): fly to it, never zooming out from where the user is
@@ -682,6 +699,8 @@ export function createMap(canvas, labelsDiv, arch, cb) {
       markGeo.setAttribute("color", new THREE.Float32BufferAttribute(c, 3));
       render();
     },
+    // a neuron's name, shown beside its ring while it is the open one
+    setSelLabel(layer, n, text) { selLabel = { layer, n, text: (text || "").trim() }; render(); },
     setInsets(left, right) { insets.left = left; insets.right = right; resize(); },
     hover(layer, n) { hovered = layer == null ? null : { layer, n }; refreshHighlights(); },
     debug() { const tv = controls.target.clone().project(camera); return { tgtScreenX: +((tv.x + 1) / 2).toFixed(3), cam: camera.position.toArray().map(v => +v.toFixed(2)), tgt: controls.target.toArray().map(v => +v.toFixed(2)), selected, hovered, n: connections.length, hover: hoverCon ? hoverCon.list.length : 0, dist: curDist(), homeDist, w: canvas.clientWidth, h: canvas.clientHeight, insets }; },

@@ -1,4 +1,4 @@
-import { createMap } from "./map3d.js?v=79";
+import { createMap } from "./map3d.js?v=80";
 import { createScatter } from "./scatter.js?v=39";
 import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=1";
 
@@ -521,7 +521,7 @@ for (const ol of [$("#rows"), $("#run-rows")]) {
 $("#jump").addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
   const m = e.target.value.match(/L?\s*(\d+)\D+N?\s*(\d+)/i);
-  if (m) openNeuron(+m[1], +m[2]);
+  if (m) { openNeuron(+m[1], +m[2], "neuron", true, false); if (map.layerMode === null) map.flyToNeuron(+m[1], +m[2], 0.35); }
 });
 addEventListener("hashchange", fromHash);
 // what's open is kept in this browser (a reload reopens it) and never in the address bar, where every neuron would
@@ -821,6 +821,7 @@ let nameTimer, pendingName = null;
 async function saveName(p) {
   await api("/api/name", { layer: p.layer, n: p.n, name: p.name });
   const u = state.unitMap[p.layer]?.get(p.n); if (u) u.name = p.name.trim();
+  map.setSelLabel(p.layer, p.n, p.name);
   if (p.layer === state.layer && state.units[p.layer]?.length) map.setUnits(p.layer, state.units[p.layer]);
   renderList();
   if (isFocus(p.layer, p.n, "neuron")) { $("#f-name").classList.add("saved"); setTimeout(() => $("#f-name").classList.remove("saved"), 900); }
@@ -831,7 +832,10 @@ function flushName() {
 }
 // the name field wraps long names: a one-line textarea that grows to fit; Enter finishes editing instead of a newline
 function sizeNameField() { const t = $("#f-name"); t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; }
-function setNameField(v) { $("#f-name").value = v; sizeNameField(); }
+function setNameField(v) {
+  $("#f-name").value = v; sizeNameField();
+  const f = state.focus; if (f?.kind === "neuron") map.setSelLabel(f.layer, f.n, v);
+}
 $("#f-name").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } });
 $("#f-name").addEventListener("input", () => { const t = $("#f-name"); if (t.value.includes("\n")) t.value = t.value.replace(/\n+/g, " "); sizeNameField(); });
 addEventListener("resize", sizeNameField);

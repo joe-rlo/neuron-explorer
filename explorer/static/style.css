@@ -305,6 +305,15 @@ html[lang="zh-CN"] .a-busy::after { content: "思考中…"; }
 tr.con .logit { margin-top: 2px; opacity: .5; }
 tr.con .logit .tok { font-size: 10.5px; }
 
+/* the open neuron's ring: a zero-size anchor like .note, with a ring that pulses outward when something opens */
+#layer-labels .sel-mark { position: absolute; width: 0; height: 0; pointer-events: none; }
+#layer-labels .sel-mark::before { content: ""; position: absolute; left: -11px; top: -11px; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid #fff; box-shadow: 0 0 8px rgba(255,255,255,0.5); }
+#layer-labels .sel-mark.pulse::after { content: ""; position: absolute; left: -11px; top: -11px; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid #fff; animation: sel-pulse 1.1s ease-out 2; }
+@keyframes sel-pulse { from { transform: scale(1); opacity: 0.9; } to { transform: scale(3.2); opacity: 0; } }
+#layer-labels .sel-mark span { position: absolute; left: 16px; top: 0; transform: translateY(-50%); white-space: nowrap; max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.6); color: var(--ink); font: 11px var(--mono); }
 /* Claude's annotations on the map: .note is a zero-size anchor at the neuron */
 #layer-labels .note { position: absolute; width: 0; height: 0; pointer-events: none; }
 #layer-labels .note::before { content: ""; position: absolute; left: -7px; top: -7px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #ffd133; }

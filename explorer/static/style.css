@@ -314,6 +314,14 @@ tr.con .logit .tok { font-size: 10.5px; }
 @keyframes sel-pulse { from { transform: scale(1); opacity: 0.9; } to { transform: scale(3.2); opacity: 0; } }
 #layer-labels .sel-mark span { position: absolute; left: 16px; top: 0; transform: translateY(-50%); white-space: nowrap; max-width: 260px;
   overflow: hidden; text-overflow: ellipsis; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.6); color: var(--ink); font: 11px var(--mono); }
+/* your named neurons: a dot and the name, a zero-size anchor like .note; .bare hides the name when zoomed out */
+#layer-labels .pin { position: absolute; width: 0; height: 0; cursor: pointer; pointer-events: auto; }
+#layer-labels .pin::before { content: ""; position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.6); }
+#layer-labels .pin span { position: absolute; left: 9px; top: 0; transform: translateY(-50%); white-space: nowrap; max-width: 180px;
+  overflow: hidden; text-overflow: ellipsis; padding: 1px 5px; border-radius: 3px; background: rgba(0,0,0,0.8); color: #b8b8b8; font: 10px var(--mono); }
+#layer-labels .pin:hover span { color: var(--ink); }
+#layer-labels .pin.bare span, body.no-pins #layer-labels .pin { display: none; }
 /* Claude's annotations on the map: .note is a zero-size anchor at the neuron */
 #layer-labels .note { position: absolute; width: 0; height: 0; pointer-events: none; }
 #layer-labels .note::before { content: ""; position: absolute; left: -7px; top: -7px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #ffd133; }
@@ -667,3 +675,4 @@ button.ln-tok.on { background: var(--link); color: #000; }
 #circuit .cir-node:hover { border-color: var(--dim); }
 #circuit .cir-id { font: 10px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #circuit .cir-toks { font: 12px var(--mono); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#legend .lg-pins { margin-left: 6px; color: var(--faint); font-size: 11px; white-space: nowrap; }

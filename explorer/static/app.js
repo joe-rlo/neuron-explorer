@@ -1,4 +1,4 @@
-import { createMap } from "./map3d.js?v=82";
+import { createMap } from "./map3d.js?v=83";
 import { createScatter } from "./scatter.js?v=39";
 import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=4";
 
@@ -143,6 +143,18 @@ document.addEventListener("click", e => {
   if (c) { if (map.layerMode !== null) map.enterLayer(+c.dataset.l); else map.viewLayer(+c.dataset.l); }
   else if (e.target.closest(".r-home")) map.home();
 });
+
+// ---------- pins: your named neurons on the map (names, and field guide cards with a hypothesis) ----------
+async function refreshPins() {
+  const g = await api("/api/guide");
+  map.setPins(g.cards.map(c => ({ layer: c.layer, n: c.n, text: c.name || (c.hypothesis || "").slice(0, 40) || `L${c.layer} N${c.n}` })));
+}
+{
+  let on = true; try { on = localStorage.getItem("ne.pins") !== "off"; } catch {}
+  $("#show-pins").checked = on; document.body.classList.toggle("no-pins", !on);
+  $("#show-pins").onchange = e => { document.body.classList.toggle("no-pins", !e.target.checked); try { localStorage.setItem("ne.pins", e.target.checked ? "on" : "off"); } catch {} };
+}
+refreshPins();
 
 // tip lives in the embed view section; lift it to body so the map can use it too
 document.body.appendChild(tip);
@@ -947,7 +959,7 @@ let nameTimer, pendingName = null;
 async function saveName(p) {
   await api("/api/name", { layer: p.layer, n: p.n, name: p.name });
   const u = state.unitMap[p.layer]?.get(p.n); if (u) u.name = p.name.trim();
-  map.setSelLabel(p.layer, p.n, p.name);
+  map.setSelLabel(p.layer, p.n, p.name); refreshPins();
   if (p.layer === state.layer && state.units[p.layer]?.length) map.setUnits(p.layer, state.units[p.layer]);
   renderList();
   if (isFocus(p.layer, p.n, "neuron")) { $("#f-name").classList.add("saved"); setTimeout(() => $("#f-name").classList.remove("saved"), 900); }
@@ -1730,7 +1742,7 @@ function drawCard() {
 }
 async function saveCard(change, redraw = true) {
   const o = FG.open; if (!o) return;
-  try { const c = await api("/api/guide/card", { layer: o.layer, n: o.n, ...change }); if (FG.open === o) { FG.card = c; if (redraw) drawCard(); } }
+  try { const c = await api("/api/guide/card", { layer: o.layer, n: o.n, ...change }); refreshPins(); if (FG.open === o) { FG.card = c; if (redraw) drawCard(); } }
   catch (err) { $("#status").textContent = err.message; }
 }
 const cardFile = ext => `L${FG.card.layer}_N${FG.card.n}${FG.card.name ? "_" + FG.card.name.replace(/[^\w-]+/g, "_").slice(0, 40) : ""}.${ext}`;

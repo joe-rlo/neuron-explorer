@@ -366,9 +366,32 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     selText.textContent = selected ? `L${selected.layer} N${selected.n}${named ? ` · ${named}` : ""}` : `L${headSel.layer} h${headSel.head}`;
   }
   function pulseSel() { selEl.classList.remove("pulse"); void selEl.offsetWidth; selEl.classList.add("pulse"); }
+  // pins: the neurons you've named or carded in the field guide, a dot with the name beside it. Names show once the
+  // view is zoomed in a little, or always when there are only a few; a click opens the neuron
+  let pins = [];
+  function setPins(items) {
+    for (const a of pins) a.el.remove();
+    pins = (items || []).map(it => {
+      const el = document.createElement("div"); el.className = "pin";
+      const t = document.createElement("span"); t.textContent = it.text; el.appendChild(t);
+      el.title = `L${it.layer} N${it.n}${it.text ? ` · ${it.text}` : ""}`;
+      el.onclick = () => cb.onPick(it.layer, it.n);
+      labelsDiv.appendChild(el); return { layer: it.layer, n: it.n, el };
+    });
+    render();
+  }
+  function placePins(w, h) {
+    const named = pins.length <= 12 || fade.amt > 0.2 || layerMode !== null;
+    for (const a of pins) {
+      const v = neuronPos(a.layer, a.n).project(camera), open = selected && selected.layer === a.layer && selected.n === a.n;
+      a.el.style.display = v.z > 1 || open || layerMode !== null && a.layer !== layerMode ? "none" : "";
+      a.el.classList.toggle("bare", !named);
+      a.el.style.left = `${(v.x + 1) / 2 * w}px`; a.el.style.top = `${(1 - v.y) / 2 * h}px`;
+    }
+  }
   function placeNotes() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
-    placeSel(w, h);
+    placeSel(w, h); placePins(w, h);
     for (const a of notes) {
       const v = neuronPos(a.layer, a.n).project(camera);
       a.el.style.display = v.z > 1 || layerMode !== null && a.layer !== layerMode ? "none" : "";
@@ -739,7 +762,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     },
     // edges: Int16Array, 6 per link (src layer, src n, dst layer, dst n, 10 * z * sign, hop), or null to hide
     setWeb(edges) { webEdges = edges; buildWeb(); refreshHighlights(); },
-    enterLayer, exitLayer, viewLayer, setNotes,
+    enterLayer, exitLayer, viewLayer, setNotes, setPins,
     // centre the view on a neuron, keeping the zoom unless it is wider than a few layers' worth
     focusNeuron(layer, n) { if (layerMode === null) flyTo(neuronPos(layer, n), Math.min(curDist(), homeDist * 0.35)); },
     // fly close to one neuron, keeping the current viewing direction

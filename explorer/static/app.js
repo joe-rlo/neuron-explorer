@@ -2381,6 +2381,21 @@ $("#tour-card").addEventListener("click", e => {
   showTour(tourAt + (t === "next" ? 1 : -1));
 });
 addEventListener("keydown", e => { if (tourAt >= 0 && e.key === "Escape") endTour(); });
+// map keys: ← and → step through the layers, F frames the open neuron, H goes back to the whole model. Ignored while
+// typing, during the tour, and off the map view
+addEventListener("keydown", e => {
+  if (state.view !== "map" || tourAt >= 0 || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  const k = e.key.toLowerCase(), f = state.focus;
+  if (k === "arrowleft" || k === "arrowright") {
+    const from = map.layerMode ?? rulerInfo?.center ?? (f && f.kind !== "head" ? f.layer : state.layer ?? 0);
+    const l = Math.max(0, Math.min(arch.n_layers - 1, from + (k === "arrowright" ? 1 : -1)));
+    if (map.layerMode !== null) { setLayer(l); map.enterLayer(l); } else map.viewLayer(l);
+  } else if (k === "f" && f?.kind === "neuron") { if (map.layerMode === null) map.flyToNeuron(f.layer, f.n, 0.22); }
+  else if (k === "h") map.home();
+  else return;
+  e.preventDefault();
+});
 addEventListener("resize", () => { if (tourAt >= 0) showTour(tourAt); });
 $("#tour-btn").onclick = () => showTour(0);
 let seenTour = false; try { seenTour = localStorage.getItem("ne.tour") === "seen"; } catch {}

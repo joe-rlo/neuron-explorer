@@ -1512,6 +1512,19 @@ async def infer(req: Request):
     return {"ready": True, "tokens": [u[0] for u in units], "pos": [u[1][-1] for u in units]}
 
 
+@app.get("/api/infer/lens")
+async def infer_lens(pos: int):
+    """The logit lens down the layers at one token of the last run text (its position in /api/infer's ids): each
+    layer's top guesses for the next token, and how much each gives the model's final top guess."""
+    if "ids" not in _infer:
+        return {"error": "nothing run"}
+    ids = _infer["ids"]
+    pos = pos % len(ids)
+    lp = await asyncio.to_thread(rt.resid_lens, ids, pos)
+    v = await asyncio.to_thread(rt.vocab_strings)
+    return {"pos": pos, "token": v[ids[pos]], **learn.lens_rows(lp, v, k=3)}
+
+
 @app.get("/api/infer/view")
 async def infer_view(pos: int = -1, sign: str = "both", lo: int = 0, hi: int = 99, min: float = 1.0, q: str = "",
                      limit: int = 300):

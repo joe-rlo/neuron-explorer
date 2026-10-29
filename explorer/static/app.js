@@ -1,6 +1,6 @@
 import { createMap } from "./map3d.js?v=83";
 import { createScatter } from "./scatter.js?v=39";
-import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=4";
+import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=5";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -13,6 +13,7 @@ addEventListener("unhandledrejection", e => { const el = document.querySelector(
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDose = d => (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d);
 
+let playing = false, playGen = 0;  // a token playing through the layers (see playToken); declared early, stopPlay runs from anywhere
 let agentSelecting = false, agentMarked = false;  // Claude's selections and marks (see agentUi); declared early, openNeuron reads them on load
 const state = { layer: null, units: {}, unitMap: {}, focus: null, unit: null, view: "map", chat: { mode: "add", dir: "writes", dose: { add: 0.8, mul: 2 } } };
 const ADD_STEPS = [...Array.from({ length: 30 }, (_, i) => +((i + 1) * 0.05).toFixed(2)), 1.75, 2, 2.5, 3, 4, 5];
@@ -115,8 +116,8 @@ const hoverCache = new Map();
 // Full-attention layers stand taller; the layers on screen are lit, the one the view centres on underlined, the open
 // neuron's layer dotted, and bars show how many marks (lens hits, or what fired) each layer has. A click flies there.
 // rulerNote: a line of text per layer that a token's play-through writes in (see playToken)
-const rulerNote = [];
-let rulerInfo = null;
+const rulerNote = [], rulerFinal = [];  // rulerFinal: the share of the final guess at each layer, as a play goes
+let rulerInfo = null, rulerAt = null;  // rulerAt: the layer a play has reached
 function renderRuler(info = rulerInfo) {
   rulerInfo = info; const el = $("#ruler"); if (!el || !info) return;
   // clear of the legend button at the bottom left
@@ -124,12 +125,14 @@ function renderRuler(info = rulerInfo) {
   el.style.left = `${Math.max(info.left + 16, lg.right + 14)}px`; el.style.right = `${info.right + 16}px`;
   if (!el.children.length) {
     el.innerHTML = `<button class="r-home" title="${esc(t("ruler.home"))}">⌂</button><div class="r-cells">${Array.from({ length: arch.n_layers }, (_, l) =>
-      `<button class="r-cell${arch.layer_types[l] === "full_attention" ? " full" : ""}" data-l="${l}"><i class="r-bar up"></i><i class="r-bar dn"></i><span>${l}</span></button>`).join("")}</div><div class="r-note"></div>`;
+      `<button class="r-cell${arch.layer_types[l] === "full_attention" ? " full" : ""}" data-l="${l}"><i class="r-bar up"></i><i class="r-bar dn"></i><i class="r-lens"></i><span>${l}</span></button>`).join("")}</div><div class="r-note"></div>`;
   }
   const mx = info.marks ? Math.max(1, ...info.marks.map(([a, b]) => a + b)) : 1;
   el.querySelectorAll(".r-cell").forEach(c => {
     const l = +c.dataset.l, [up, dn] = info.marks?.[l] || [0, 0];
     c.classList.toggle("seen", info.inView[l]); c.classList.toggle("center", info.center === l); c.classList.toggle("open", info.open === l);
+    c.classList.toggle("play", rulerAt === l);
+    c.querySelector(".r-lens").style.opacity = rulerFinal[l] != null ? (0.15 + 0.85 * Math.sqrt(rulerFinal[l])).toFixed(2) : 0;
     c.querySelector(".up").style.height = `${Math.round(14 * Math.sqrt(up / mx))}px`;
     c.querySelector(".dn").style.height = `${Math.round(14 * Math.sqrt(dn / mx))}px`;
     c.title = t(arch.layer_types[l] === "full_attention" ? "ruler.full" : "ruler.linear", { l })
@@ -360,6 +363,7 @@ let leftTab = "net";
 document.querySelectorAll("#ltabs button[data-lt]").forEach(b => b.onclick = () => showLeft(b.dataset.lt));
 function showLeft(t) {
   if (t === leftTab) return;
+  if (t !== "run") stopPlay();
   leftTab = t;
   document.querySelectorAll("#ltabs button[data-lt]").forEach(b => b.classList.toggle("on", b.dataset.lt === t));
   $("#lt-net").classList.toggle("on", t === "net"); $("#lt-run").classList.toggle("on", t === "run");
@@ -421,6 +425,7 @@ async function runInfer(text, g) {
     const r = await api("/api/infer", { text, minus });
     if (!stillWanted(g, "fires", text) || JSON.stringify(minusTexts()) !== JSON.stringify(minus)) return;
     if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.measuring"))}</li>`; return; }
+    stopPlay(); rulerNote.length = 0; rulerFinal.length = 0; $("#inf-play-note").textContent = "";
     state.inf = { ...state.inf, text, key, pos: -1, tokens: r.tokens };
     $("#inf-toks").innerHTML = r.tokens.map((t, i) => `<button data-i="${r.pos[i]}">${esc(t)}</button>`).join("");
   }
@@ -481,6 +486,7 @@ $("#inf-toks").addEventListener("pointerleave", () => {
 });
 $("#inf-toks").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
+  stopPlay();
   state.inf.pos = state.inf.pos === +b.dataset.i ? -1 : +b.dataset.i;
   document.querySelectorAll("#inf-toks button").forEach(x => x.classList.toggle("on", +x.dataset.i === state.inf.pos));
   inferView(); showTokenPaths(state.inf.pos); lightHeads(state.inf.pos);
@@ -500,6 +506,13 @@ async function inferView(g = qGen) {
     min: $("#inf-min").value || 0, q: $("#inf-q").value, limit: 300 });
   const r = await api(`/api/infer/view?${qs}`);
   if (mine !== viewGen || g !== qGen || state.qMode !== "fires") return;
+  const marks = viewMarks(r);
+  if (leftTab === "run" && !playing) map.setMarks(marks);
+  fireResults = { ...r, fires: true, ready: true };
+  renderResults(fireResults, $("#run-rows"));
+}
+// the map marks in an /api/infer/view reply: every neuron with a score there, the strongest 40000 at most
+function viewMarks(r) {
   const marks = [];
   if (r.map) {
     const bin = atob(r.map), u16 = new Uint16Array(bin.length / 2);
@@ -511,10 +524,47 @@ async function inferView(g = qGen) {
       if (v) marks.push({ layer: Math.floor(i / N), n: i % N, sign: v < 0 ? "-" : "+", w: Math.min(1, 0.25 + Math.abs(v) / 4) });
     }
   }
-  if (leftTab === "run") map.setMarks(marks.length > 40000 ? marks.sort((a, b) => b.w - a.w).slice(0, 40000) : marks);
-  fireResults = { ...r, fires: true, ready: true };
-  renderResults(fireResults, $("#run-rows"));
+  return marks.length > 40000 ? marks.sort((a, b) => b.w - a.w).slice(0, 40000) : marks;
 }
+
+// ---------- play: one token through the layers ----------
+// What fired at the token lights up layer by layer, and the ruler follows along with the logit lens: the model's
+// guess for the next token read at each layer (/api/infer/lens), and how much of its final guess it has by then.
+// Any other change to the run (a new token, new filters) stops it.
+async function playToken() {
+  const f = state.inf, btns = [...document.querySelectorAll("#inf-toks button")];
+  if (!f.text || !btns.length) return;
+  if (playing) { stopPlay(); return; }
+  const g = ++playGen, pos = f.pos >= 0 ? f.pos : +btns[btns.length - 1].dataset.i;
+  const tokText = btns.find(b => +b.dataset.i === pos)?.textContent ?? "";
+  const note = $("#inf-play-note"); note.textContent = "…";
+  const qs = new URLSearchParams({ pos, sign: f.sign, lo: 0, hi: 99, min: $("#inf-min").value || 0, q: $("#inf-q").value, limit: 1 });
+  const [lens, view] = await Promise.all([api(`/api/infer/lens?pos=${pos}`), api(`/api/infer/view?${qs}`)]);
+  if (g !== playGen || lens.error) { note.textContent = ""; return; }
+  playing = true; $("#inf-play").textContent = t("play.stop");
+  const marks = viewMarks(view), L = arch.n_layers, pct = p => `${(p * 100).toFixed(p < 0.1 ? 1 : 0)}%`;
+  rulerNote.length = 0; rulerFinal.length = 0;
+  for (let l = 0; l < L && g === playGen; l++) {
+    const [tok, p] = lens.layers[l].top[0];
+    rulerNote[l] = t("play.layerGuess", { tok: JSON.stringify(tok), p: pct(p) });
+    rulerFinal[l] = lens.layers[l].final; rulerAt = l;
+    map.setMarks(marks.filter(m => m.layer <= l));
+    renderRuler();
+    note.textContent = t("play.at", { tok: JSON.stringify(tokText), l, guess: JSON.stringify(tok), p: pct(p), answer: JSON.stringify(lens.answer), pf: pct(lens.layers[l].final) });
+    await new Promise(r => setTimeout(r, l === L - 1 ? 0 : 150));
+  }
+  if (g !== playGen) return;
+  playing = false; rulerAt = null; $("#inf-play").textContent = t("play.btn"); renderRuler();
+  note.textContent = t("play.done", { tok: JSON.stringify(tokText), answer: JSON.stringify(lens.answer), p: pct(lens.layers[L - 1].final) });
+  inferView();
+}
+function stopPlay() {
+  playGen++; if (!playing) return;
+  playing = false; rulerAt = null; $("#inf-play").textContent = t("play.btn"); $("#inf-play-note").textContent = "";
+  renderRuler(); inferView();
+}
+$("#inf-play").onclick = playToken;
+
 function halfToFloat(h) {
   const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
   return e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15);
@@ -524,7 +574,7 @@ async function runLensSearch() {
   const q = $("#lens-q").value.trim(), g = ++qGen;
   if (q.length < 2) {
     // an emptied box clears both: lens hits, and the last run with its token chips, pinned token and token web
-    lensResults = null; fireResults = null;
+    lensResults = null; fireResults = null; stopPlay();
     state.inf = { ...state.inf, text: null, key: null, pos: -1, tokens: null };
     $("#inf-toks").innerHTML = ""; $("#run-rows").innerHTML = "";
     syncLeftMap(); renderList(); return;

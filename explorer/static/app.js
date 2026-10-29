@@ -1,4 +1,4 @@
-import { createMap } from "./map3d.js?v=81";
+import { createMap } from "./map3d.js?v=82";
 import { createScatter } from "./scatter.js?v=39";
 import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=4";
 

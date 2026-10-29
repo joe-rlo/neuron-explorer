@@ -19,12 +19,14 @@ const BRIGHT = Number(new URLSearchParams(location.search).get("bright")) || 2.5
 // the boost lifts the structure (sheets, wires, idle points); data colours keep their hue
 for (const k in PAL) if (!["bg", "swept", "lo", "hi", "named"].includes(k)) PAL[k] = new THREE.Color(PAL[k]).multiplyScalar(BRIGHT);
 
-function glowPoints(sizePx, maxScale = 3) {
+// data: points that carry a colour (hits, links) keep their hue up close instead of brightening to white
+function glowPoints(sizePx, maxScale = 3, data = false) {
   return new THREE.RawShaderMaterial({
     uniforms: { size: { value: sizePx * Math.min(devicePixelRatio, 2) }, ref: { value: 1 }, maxScale: { value: maxScale },
-      focusX: { value: 0 }, fadeW: { value: 1 }, fadeAmt: { value: 0 }, camSide: { value: 1 }, tdist: { value: 1 } },
+      focusX: { value: 0 }, fadeW: { value: 1 }, fadeAmt: { value: 0 }, camSide: { value: 1 }, tdist: { value: 1 },
+      dim: { value: 1 }, minPx: { value: 0 } },
     vertexShader: `precision highp float;
-      uniform mat4 modelViewMatrix, projectionMatrix; uniform float size, ref, maxScale, focusX, fadeW, fadeAmt, camSide, tdist;
+      uniform mat4 modelViewMatrix, projectionMatrix; uniform float size, ref, maxScale, focusX, fadeW, fadeAmt, camSide, tdist, dim, minPx;
       attribute vec3 position; attribute vec3 color; varying vec3 vC;
       void main() { float d = (position.x - focusX) / fadeW;
         vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
@@ -37,8 +39,9 @@ function glowPoints(sizePx, maxScale = 3) {
         float keep = mix(1.0, exp(-d * d), fadeAmt * 0.75) * mix(1.0, 1.0 - 0.6 * fadeAmt, front);
         // points nearer than the focus are drawn bigger; dim them by the extra size so they don't outshine it
         float sc = clamp(sqrt(ref / -mv.z), 0.6, maxScale), sc0 = clamp(sqrt(ref / tdist), 0.6, maxScale);
-        vC = color * keep * near * min(1.0, sc0 / sc);
-        gl_PointSize = size * sc; }`,
+        vC = color * keep * near * min(1.0, sc0 / sc) * dim;
+        ${data ? "vC /= max(1.0, max(vC.r, max(vC.g, vC.b)));" : ""}
+        gl_PointSize = max(size * sc, minPx); }`,
     fragmentShader: `precision highp float; varying vec3 vC;
       void main() { float r = length(gl_PointCoord - 0.5); if (r > 0.5) discard;
         float edge = 1.0 - smoothstep(0.38, 0.5, r); gl_FragColor = vec4(vC * edge, 1.0); }`,
@@ -178,7 +181,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
 
   // highlights and connections (their geometry changes every update, so culling is off)
   const hiGeo = new THREE.BufferGeometry();
-  const hiMat = glowPoints(5, 2);
+  const hiMat = glowPoints(5, 2, true);
   const hiPts = new THREE.Points(hiGeo, hiMat);
   hiPts.frustumCulled = false; hiPts.renderOrder = 3;
   scene.add(hiPts);
@@ -201,7 +204,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   const webLines = new LineSegments2(new LineSegmentsGeometry(), webMat);
   webLines.frustumCulled = false; webLines.renderOrder = 1; webLines.visible = false;
   scene.add(webLines);
-  const webPtGeo = new THREE.BufferGeometry(), webPts = new THREE.Points(webPtGeo, glowPoints(4.5, 2.5));
+  const webPtGeo = new THREE.BufferGeometry(), webPts = new THREE.Points(webPtGeo, glowPoints(4.5, 2.5, true));
   webPts.frustumCulled = false; webPts.renderOrder = 2; webPts.visible = false;
   scene.add(webPts);
   let webEdges = null;
@@ -249,7 +252,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   const headMid = (layer, head) => { const i = (headStart[layer] + head) * 6;
     return new THREE.Vector3((headPos[i] + headPos[i + 3]) / 2, (headPos[i + 1] + headPos[i + 4]) / 2, (headPos[i + 2] + headPos[i + 5]) / 2); };
   const markGeo = new THREE.BufferGeometry();
-  const markPts = new THREE.Points(markGeo, glowPoints(4, 2));
+  const markPts = new THREE.Points(markGeo, glowPoints(4, 2, true));
   markPts.frustumCulled = false; markPts.renderOrder = 1;
   scene.add(markPts);
 
@@ -309,6 +312,41 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     m.userData = { layer: l };
     scene.add(m); labels.push(m);
   }
+  // heat tiles: from far away a sheet's dots blur together, so each sheet also carries a coarse map of the marks on
+  // it (amber up, pink down, brighter where denser), shown at the overview and faded out as the camera closes in
+  const HEAT = 20, heat = [];
+  for (let l = 0; l < L; l++) {
+    const data = new Uint8Array(HEAT * HEAT * 4), tex = new THREE.DataTexture(data, HEAT, HEAT);
+    tex.magFilter = tex.minFilter = THREE.LinearFilter;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(SHEET, SHEET), new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, opacity: 0 }));
+    m.rotation.y = Math.PI / 2;  // local +x runs toward -z, as the labels
+    m.position.set(layerX(l) + MLP_DX + 0.01, SHEET_Y0 + SHEET / 2, 0);
+    m.visible = false; m.renderOrder = 2;
+    scene.add(m); heat.push({ m, data, tex });
+  }
+  function paintHeat(marks) {
+    const cnt = Array.from({ length: L }, () => new Float32Array(HEAT * HEAT * 2));
+    for (const mk of marks) {
+      const c = layoutCells ? layoutCells[mk.layer * N + mk.n] : mk.n, i = c % gridSide, j = Math.floor(c / gridSide);
+      const u = Math.min(HEAT - 1, Math.floor((1 - i / (gridSide - 1)) * HEAT)), v = Math.min(HEAT - 1, Math.floor(j / (gridSide - 1) * HEAT));
+      cnt[mk.layer][(v * HEAT + u) * 2 + (mk.sign === "-" ? 1 : 0)] += mk.w ?? 1;
+    }
+    let mx = 0;
+    for (const c of cnt) for (let k = 0; k < c.length; k += 2) mx = Math.max(mx, c[k] + c[k + 1]);
+    for (let l = 0; l < L; l++) {
+      const { m, data, tex } = heat[l], c = cnt[l];
+      let any = false;
+      for (let k = 0; k < HEAT * HEAT; k++) {
+        const up = c[2 * k], dn = c[2 * k + 1], a = mx ? Math.sqrt((up + dn) / mx) : 0, f = up + dn ? up / (up + dn) : 0;
+        // amber (255,181,71) to pink (255,79,154) by the share pushing up; premultiplied for additive blending
+        data[4 * k] = 255 * a; data[4 * k + 1] = (79 + 102 * f) * a; data[4 * k + 2] = (154 - 83 * f) * a; data[4 * k + 3] = 255 * a;
+        if (a) any = true;
+      }
+      tex.needsUpdate = true; m.visible = any;
+    }
+  }
+  let structDim = 1;  // the structure (idle dots, slabs) dims while there are marks to show
   const dataLayers = new Set();
   let unitsLayer = null;
 
@@ -534,6 +572,8 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   }
 
   function applyFade() {
+    pointMat.uniforms.dim.value = structDim;
+    if (layerMode !== null) for (const h of heat) h.m.material.opacity = 0;
     if (layerMode !== null) {
       const fx = layerX(layerMode) + MLP_DX;
       pointMat.uniforms.focusX.value = fx; pointMat.uniforms.fadeW.value = 0.05; pointMat.uniforms.fadeAmt.value = 1;
@@ -564,13 +604,14 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     fade.fx = fx; fade.fw = fw; fade.amt = amt; fade.side = side;
     for (const slab of slabs) {
       const d = (slab.position.x - fx) / fw, f = 1 - amt * (1 - Math.exp(-d * d));
-      slab.material.opacity = slab.userData.baseOpacity * f; slab.userData.edges.material.opacity = f;
+      slab.material.opacity = slab.userData.baseOpacity * f * structDim; slab.userData.edges.material.opacity = f * (0.4 + 0.6 * structDim);
     }
     for (let l = 0; l < L; l++) {
       const d = (layerX(l) + MLP_DX - fx) / fw;
       labels[l].material.opacity = labels[l].material.userData.base * (1 - 0.5 * amt * (1 - Math.exp(-d * d)));  // other layers keep half
     }
     for (const m of fadeLines) m.opacity = m.userData.base * (1 - 0.9 * amt);
+    for (const h of heat) h.m.material.opacity = 0.85 * (1 - amt) ** 2;
   }
 
   // camera moves animate; a newer move (or the user grabbing the view) cancels the one under way. toDir turns the view
@@ -716,6 +757,10 @@ export function createMap(canvas, labelsDiv, arch, cb) {
       }
       markGeo.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
       markGeo.setAttribute("color", new THREE.Float32BufferAttribute(c, 3));
+      // a few hundred hits stay big enough to see from the overview; thousands (what fired) stay small
+      markPts.material.uniforms.minPx.value = (marks.length < 3000 ? 5 : 0) * Math.min(devicePixelRatio, 2);
+      structDim = marks.length ? 0.45 : 1;
+      paintHeat(marks);
       render();
     },
     // a neuron's name, shown beside its ring while it is the open one

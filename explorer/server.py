@@ -26,6 +26,7 @@ import experiment as exm  # noqa: E402
 import tasks as tk  # noqa: E402
 import lab  # noqa: E402
 import learn  # noqa: E402
+import circuit  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 # the agent's neuronary.org tools (agent_mcp.py) read the person's token from here when set
@@ -1860,6 +1861,21 @@ def web(layer: int, n: int, first: int = 5, k: int = 2, zmin: float = 15, cap: i
     round(10 * z) * sign, hop."""
     rows = np.array([(*r[:4], round(r[4] * 10), r[5]) for r in cone_links(layer, n, k, zmin, cap, first, hops or None)], np.int16).reshape(-1, 6)
     return Response(rows.tobytes(), media_type="application/octet-stream", headers={"X-Web-Total": str(len(rows))})
+
+
+@app.get("/api/circuit")
+def circuit_view(layer: int, n: int, first: int = 5, k: int = 2, per: int = 10):
+    """The open neuron's web as a diagram: up to `per` neurons each way that connect back to it (circuit.pick), each
+    with its name and the steer lens tokens of the pole the chain drives, and the links among them."""
+    nodes, edges = circuit.pick(cone_links(layer, n, k, 15, 20000, first), (layer, n), per)
+    lens, v, _, src = _lens_base()
+    nm = names()
+    for d in nodes:
+        pole = "up" if d["sign"] > 0 else "down"
+        toks = [v[t].strip() for t in lens[pole][d["layer"], d["n"], :8]]
+        d["toks"] = [t for t in toks if t and "\ufffd" not in t][:4]
+        d["name"] = nm.get(f"L{d['layer']}/N{d['n']}", "")
+    return {"src": src, "nodes": nodes, "edges": edges}
 
 
 _idf = {}

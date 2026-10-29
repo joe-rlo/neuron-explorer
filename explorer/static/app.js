@@ -1,6 +1,6 @@
 import { createMap } from "./map3d.js?v=81";
 import { createScatter } from "./scatter.js?v=39";
-import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=2";
+import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=4";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -189,7 +189,7 @@ async function refreshWeb() {
   renderList();
 }
 document.querySelectorAll("#web-mode button").forEach(b => b.onclick = () => { webOn = b.dataset.w === "on"; webKey = null; refreshWeb(); });
-$("#web-z").onchange = () => refreshWeb();
+$("#web-z").onchange = () => { refreshWeb(); if (state.view === "circuit") renderCircuit(); };
 
 // ---------- scatter ----------
 const scatter = createScatter($("#scatter"), {
@@ -220,8 +220,96 @@ function setView(v) {
   document.querySelectorAll("#views button").forEach(x => x.classList.toggle("on", x.dataset.view === v));
   $("#map-view").classList.toggle("on", v === "map");
   $("#embed-view").classList.toggle("on", v === "embed");
+  $("#circuit-view").classList.toggle("on", v === "circuit");
   if (v === "embed") loadEmbeddings();
+  if (v === "circuit") renderCircuit();
 }
+
+// ---------- circuit: the open neuron's web as a flat diagram ----------
+// The open neuron in white, with its strongest neurons each way that still connect back to it (see /api/circuit),
+// banded by steps from it: what feeds it before, what it feeds after. The bands run down the gap between the panels
+// when it is tall and across when it is wide; a band too long for the gap wraps. A node shows the steer lens of the
+// pole the chain drives, edged amber when the open neuron firing pushes it up (or, upstream, when it firing pushes the
+// open neuron up) and pink when down. Links are thicker for stronger weights. Click a node to open it there.
+const CIR = { per: 10, cache: new Map(), gen: 0 };
+const CIR_W = 124, CIR_H = 46;
+async function renderCircuit() {
+  const el = $("#circuit"), f = state.focus, g = ++CIR.gen;
+  el.style.left = `${state.insets?.[0] ?? 0}px`; el.style.right = `${state.insets?.[1] ?? 0}px`;
+  if (!f || f.kind !== "neuron") { el.innerHTML = `<div class="cir-empty">${esc(t("circuit.empty"))}</div>`; return; }
+  const first = Math.max(1, Math.min(24, Math.round(Number($("#web-z").value) || 5)));
+  const key = `${f.layer}/${f.n}/${first}/${CIR.per}`;
+  if (!CIR.cache.has(key)) {
+    el.innerHTML = `<div class="cir-empty">…</div>`;
+    const r = await api(`/api/circuit?layer=${f.layer}&n=${f.n}&first=${first}&per=${CIR.per}`);
+    CIR.cache.set(key, r);
+  }
+  if (g !== CIR.gen) return;
+  const { nodes, edges } = CIR.cache.get(key);
+  const nUp = nodes.filter(d => d.hop < 0).length, nDown = nodes.filter(d => d.hop > 0).length;
+  el.innerHTML = `<div class="cir-bar"><span>${esc(t("circuit.head", { id: `L${f.layer} N${f.n}`, up: nUp, down: nDown }))}</span>
+      <span class="seg" id="cir-per" title="${esc(t("circuit.perTitle"))}">${[6, 10, 16].map(p => `<button data-p="${p}" class="${p === CIR.per ? "on" : ""}">${p}</button>`).join("")}</span>
+      <span class="dim">${t("circuit.key")}</span></div><div class="cir-scroll"></div>`;
+  const sc = el.querySelector(".cir-scroll"), gw = sc.clientWidth, gh = sc.clientHeight, down = gh > gw * 0.8;
+  // band = one step from the open neuron; slot = place along the band. Main axis runs through the bands.
+  const LABEL = down ? 0 : 22, PAD = 16, SLOT = down ? CIR_W + 12 : CIR_H + 12, STEP = down ? CIR_H + 46 : CIR_W + 64;
+  const cap = Math.max(2, Math.floor(((down ? gw : gh - LABEL) - 2 * PAD + 12) / SLOT));
+  const hops = [...new Set(nodes.map(d => d.hop))].sort((a, b) => a - b), bands = hops.map(h => nodes.flatMap((d, i) => d.hop === h ? [i] : []));
+  const nb = nodes.map(() => []);
+  for (const [i, j] of edges) { nb[i].push(j); nb[j].push(i); }
+  // order each band by the mean place of its links in the band nearer the open neuron, working outward
+  const at = new Map(), place = (band, order) => order.forEach((i, k) => at.set(i, (k % cap) - (Math.min(cap, order.length) - 1) / 2));
+  bands.forEach((bd, b) => place(b, bd.sort((x, y) => nodes[y].score - nodes[x].score)));
+  const r0 = hops.indexOf(0), outward = [...hops.keys()].sort((a, b) => Math.abs(a - r0) - Math.abs(b - r0));
+  for (let pass = 0; pass < 2; pass++) for (const b of outward) {
+    if (b === r0) continue;
+    const nearer = new Set(bands[b + (b < r0 ? 1 : -1)]);
+    const bary = i => { const m = nb[i].filter(j => nearer.has(j)); return m.length ? m.reduce((s, j) => s + at.get(j), 0) / m.length : 0; };
+    place(b, bands[b].sort((x, y) => bary(x) - bary(y)));
+  }
+  // lines along the main axis: a band longer than cap wraps onto extra lines
+  const line = new Map(), bandLine = [];
+  let ln = 0;
+  bands.forEach((bd, b) => { bandLine.push(ln); bd.forEach((i, k) => line.set(i, ln + Math.floor(k / cap))); ln += Math.ceil(bd.length / cap); });
+  const span = Math.min(cap, Math.max(...bands.map(bd => bd.length))) * SLOT - 12;
+  const main = ln * STEP - (STEP - (down ? CIR_H : CIR_W)), W = 2 * PAD + (down ? span + 70 : main), H = 2 * PAD + LABEL + (down ? main : span);
+  const pos = i => { const u = PAD + line.get(i) * STEP, v = PAD + span / 2 + at.get(i) * SLOT - (down ? CIR_W : CIR_H) / 2;
+    return down ? [v + 70, u] : [u, v + LABEL]; };
+  const zmax = Math.max(1, ...edges.map(e => Math.abs(e[2])));
+  const paths = edges.map(([i, j, z]) => {
+    const [x0, y0] = pos(i), [x1, y1] = pos(j);
+    const d = down ? (() => { const a = x0 + CIR_W / 2, b = y0 + CIR_H, c = x1 + CIR_W / 2, e = y1, m = (b + e) / 2; return `M${a},${b} C${a},${m} ${c},${m} ${c},${e}`; })()
+      : (() => { const a = x0 + CIR_W, b = y0 + CIR_H / 2, c = x1, e = y1 + CIR_H / 2, m = (a + c) / 2; return `M${a},${b} C${m},${b} ${m},${e} ${c},${e}`; })();
+    return `<path data-i="${i}" data-j="${j}" class="${z > 0 ? "up" : "dn"}" d="${d}" stroke-width="${(1 + 4 * Math.abs(z) / zmax).toFixed(1)}"/>`;
+  }).join("");
+  const boxes = nodes.map((d, i) => {
+    const [x, y] = pos(i), cls = d.hop === 0 ? "root" : d.sign > 0 ? "up" : "dn";
+    return `<button class="cir-node ${cls}" data-i="${i}" data-l="${d.layer}" data-n="${d.n}" style="left:${x}px;top:${y}px" title="${esc(`L${d.layer} N${d.n}${d.name ? ` · ${d.name}` : ""} · ${d.toks.join("  ")}`)}">
+      <span class="cir-id">L${d.layer} N${d.n}${d.name ? ` · ${esc(d.name)}` : ""}</span><span class="cir-toks">${d.toks.map(esc).join("  ") || "—"}</span></button>`;
+  }).join("");
+  const labels = hops.map((h, b) => {
+    const txt = h === 0 ? "" : t(h < 0 ? "circuit.before" : "circuit.after", { h: Math.abs(h) }), u = PAD + bandLine[b] * STEP;
+    return down ? `<span class="cir-band" style="left:${PAD - 8}px;top:${u + CIR_H / 2 - 7}px">${txt}</span>` : `<span class="cir-band" style="left:${u}px;top:${PAD - 4}px;width:${CIR_W}px;text-align:center">${txt}</span>`;
+  }).join("");
+  sc.innerHTML = `<div class="cir-fit"><div class="cir-plane" style="width:${W}px;height:${H}px">${labels}
+    <svg width="${W}" height="${H}">${paths}</svg><div class="cir-nodes">${boxes}</div></div></div>`;
+  // shrink to fit (down to 70%), then scroll, starting with the open neuron in view
+  const fit = sc.firstElementChild, k = Math.max(0.7, Math.min(1, (gw - 4) / W, (gh - 4) / H));
+  fit.style.width = `${W * k}px`; fit.style.height = `${H * k}px`; fit.firstElementChild.style.transform = `scale(${k})`;
+  const [rx, ry] = pos(0);
+  sc.scrollLeft = Math.max(0, (rx + CIR_W / 2) * k - gw / 2); sc.scrollTop = Math.max(0, (ry + CIR_H / 2) * k - gh / 2);
+}
+$("#circuit").addEventListener("click", e => {
+  const p = e.target.closest("#cir-per button"); if (p) { CIR.per = +p.dataset.p; renderCircuit(); return; }
+  const b = e.target.closest(".cir-node"); if (b) openNeuron(+b.dataset.l, +b.dataset.n, "neuron", true, false);
+});
+// hovering a node lights its links and dims the rest
+$("#circuit").addEventListener("pointerover", e => {
+  const b = e.target.closest(".cir-node"), svg = $("#circuit svg"); if (!svg) return;
+  svg.classList.toggle("focus", !!b);
+  svg.querySelectorAll("path").forEach(p => p.classList.toggle("lit", !!b && (p.dataset.i === b.dataset.i || p.dataset.j === b.dataset.i)));
+});
+$("#circuit").addEventListener("pointerleave", () => $("#circuit svg")?.classList.remove("focus"));
 const layerSel = $("#layer");
 for (let l = 0; l < arch.n_layers; l++) {
   const o = document.createElement("option"); o.value = l;
@@ -582,7 +670,9 @@ function fromHash() {
 function updateInsets() {
   const listShown = !$("#list").classList.contains("hidden");
   const focusShown = focusEl.classList.contains("on") && !focusEl.classList.contains("collapsed");
-  map.setInsets(listShown ? $("#list").getBoundingClientRect().width + 24 : 0, focusShown ? focusEl.getBoundingClientRect().width + 24 : 0);
+  state.insets = [listShown ? $("#list").getBoundingClientRect().width + 24 : 0, focusShown ? focusEl.getBoundingClientRect().width + 24 : 0];
+  map.setInsets(...state.insets);
+  const c = $("#circuit"); c.style.left = `${state.insets[0]}px`; c.style.right = `${state.insets[1]}px`;
 }
 $("#layer-back").onclick = () => map.exitLayer();
 // panel widths follow the window (vw-based), so window resizes and browser zoom must re-measure them
@@ -613,7 +703,8 @@ const focusEl = $("#focus");
 $("#f-close").onclick = () => { flushName(); if (running) running.abort(); state.focus = null; $("#list").classList.remove("has-focus");
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
   if (["claude", "lab", "learn"].includes(curTab())) syncTabs(); else focusEl.classList.remove("on");
-  setFocusCollapsed(false); map.select(null); refreshWeb(); renderAgentActions(); scatter.select(null, null); saveFocus(); renderList(); };
+  setFocusCollapsed(false); map.select(null); refreshWeb(); renderAgentActions(); scatter.select(null, null); saveFocus(); renderList();
+  if (state.view === "circuit") renderCircuit(); };
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const tabBtn = t => $(`#tabs button[data-tab="${t}"]`);
 const curTab = () => $("#tabs button.on")?.dataset.tab;
@@ -670,6 +761,7 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   renderList();
   if (kind === "neuron") { map.select(layer, n, fly); scatter.select(layer, n); loadNeuronHeads(layer, n); }
   refreshWeb(); renderAgentActions();
+  if (state.view === "circuit") renderCircuit();
   const u = await api(`/api/unit?layer=${layer}&n=${n}&kind=${kind}`);
   if (!isFocus(layer, n, kind)) return;
   state.unit = u;

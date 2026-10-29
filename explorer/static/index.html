@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuron Explorer</title>
-<link rel="stylesheet" href="style.css?v=87">
+<link rel="stylesheet" href="style.css?v=90">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%23151515%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%23ffd27a%22/%3E%3C/svg%3E">
 <script type="importmap">
 {"imports": {
@@ -18,6 +18,7 @@
   <nav id="views">
     <button data-view="map" class="on" title="the model as a stack of 32 layer sheets, one dot per neuron" data-i18n="nav.map">map</button>
     <button data-view="embed" title="this layer's swept rollouts embedded in 2D, colored by neuron, prompt, dose or kind" data-i18n="nav.embeddings">embeddings</button>
+    <button data-view="circuit" title="the open neuron's strongest links each way as a flat diagram, one column per layer" data-i18n="nav.circuit" data-i18n-title="nav.circuitTitle">circuit</button>
   </nav>
   <select id="layer" aria-label="layer" title="layer · ● marks layers with sweep rollouts (examples, word mass and the ranked list); other layers have the lens and connections only" data-i18n-aria-label="header.layer"></select>
   <span class="seg" id="layout-mode" data-i18n-title="header.layoutTitle"><button data-k="index" title="sheet layout: neurons in index order, N0 top left" data-i18n="header.layoutIndex">index</button><button data-k="writes" class="on" title="sheet layout: neurons that write similar directions into the residual stream sit together" data-i18n="header.layoutWrites">writes</button></span>
@@ -56,6 +57,7 @@
       <div><i class="ln" style="background:#73ff8c"></i><i class="ln" style="background:#b399ff"></i>head q (where it looks from) and k (what it looks at)</div>
     </details>
   </section>
+  <section id="circuit-view" class="view"><div id="circuit"></div></section>
   <section id="embed-view" class="view">
     <canvas id="scatter"></canvas>
     <div id="embed-empty" class="slot"></div>
@@ -168,6 +170,6 @@
   </aside>
 </main>
 <div id="tour" hidden><div id="tour-ring"></div><div id="tour-card" role="dialog" aria-label="tour"></div></div>
-<script type="module" src="app.js?v=155"></script>
+<script type="module" src="app.js?v=158"></script>
 </body>
 </html>

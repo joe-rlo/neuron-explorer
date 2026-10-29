@@ -5,6 +5,14 @@
 const en = {
   "nav.map": "map",
   "nav.embeddings": "embeddings",
+  "nav.circuit": "circuit",
+  "nav.circuitTitle": "the open neuron's strongest links each way as a flat diagram, one column per layer",
+  "circuit.empty": "Open a neuron to see its circuit: what feeds it and what it feeds.",
+  "circuit.head": "{id} · {up} feeding in · {down} fed",
+  "circuit.key": "amber: pushed up along the chain · pink: pushed down · thicker: stronger link · click a neuron to open it",
+  "circuit.before": "{h} before",
+  "circuit.after": "{h} after",
+  "circuit.perTitle": "how many neurons to keep each way",
 
   "header.layer": "layer",
   "header.layoutTitle": "sheet layout",
@@ -157,6 +165,14 @@ const en = {
 const zh = {
   "nav.map": "地图",
   "nav.embeddings": "嵌入图",
+  "nav.circuit": "回路",
+  "nav.circuitTitle": "当前神经元两侧最强的连接，画成平面图，每层一列",
+  "circuit.empty": "打开一个神经元即可查看它的回路：什么在输入它，它又输入什么。",
+  "circuit.head": "{id} · {up} 个输入 · {down} 个输出",
+  "circuit.key": "琥珀色：沿链路被推高 · 粉色：被压低 · 越粗连接越强 · 点击神经元打开",
+  "circuit.before": "前 {h} 步",
+  "circuit.after": "后 {h} 步",
+  "circuit.perTitle": "每侧保留多少个神经元",
 
   "header.layer": "层",
   "header.layoutTitle": "神经元排列",

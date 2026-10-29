@@ -642,3 +642,28 @@ button.ln-tok.on { background: var(--link); color: #000; }
 #ruler .r-bar.up { left: 10%; background: #ffb547; }
 #ruler .r-bar.dn { right: 10%; background: #ff4f9a; }
 #ruler .r-note { display: none; }
+
+/* circuit view: the open neuron's web as columns of layers */
+#circuit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; padding: 12px 16px 16px; }
+#circuit .cir-empty { margin: auto; color: var(--dim); font-size: 13px; }
+#circuit .cir-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 12px; margin-bottom: 8px; }
+#circuit .cir-bar .seg button { font: 11px var(--mono); padding: 2px 7px; }
+#circuit .cir-scroll { flex: 1; overflow: auto; min-height: 0; }
+#circuit .cir-fit { margin: 0 auto; }
+#circuit .cir-plane { position: relative; transform-origin: 0 0; }
+#circuit .cir-band { position: absolute; font: 10px var(--mono); color: var(--faint); white-space: nowrap; }
+#circuit svg { position: absolute; left: 0; top: 0; overflow: visible; }
+#circuit path { fill: none; opacity: 0.55; transition: opacity 0.12s; }
+#circuit path.up { stroke: var(--up); }
+#circuit path.dn { stroke: var(--down); }
+#circuit svg.focus path { opacity: 0.08; }
+#circuit svg.focus path.lit { opacity: 0.95; }
+#circuit .cir-nodes { position: absolute; left: 0; top: 0; }
+#circuit .cir-node { position: absolute; width: 124px; height: 46px; display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  padding: 4px 8px; text-align: left; background: #0b0d0f; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 5px; cursor: pointer; }
+#circuit .cir-node.up { border-left-color: var(--up); }
+#circuit .cir-node.dn { border-left-color: var(--down); }
+#circuit .cir-node.root { border-color: var(--sel); border-left-color: var(--sel); box-shadow: 0 0 12px rgba(255,255,255,0.25); }
+#circuit .cir-node:hover { border-color: var(--dim); }
+#circuit .cir-id { font: 10px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#circuit .cir-toks { font: 12px var(--mono); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

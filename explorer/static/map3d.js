@@ -343,30 +343,66 @@ export function createMap(canvas, labelsDiv, arch, cb) {
       renderer.render(scene, camera); placeNotes();
     });
   }
+  // the home view: the whole model framed in the part of the canvas the panels leave uncovered. The far end of the
+  // stack is drawn smaller than the near end, so instead of fitting a bounding sphere, the box corners are projected
+  // and the distance searched until they all land inside the gap, then the target is shifted to centre them there.
+  const fitCam = new THREE.PerspectiveCamera(camera.fov, 1, 0.02, 2000);
+  function boxOnScreen(target, dist, w, h, tx) {
+    fitCam.aspect = w / h; fitCam.setViewOffset(w, h, w / 2 - tx, 0, w, h); fitCam.updateProjectionMatrix();
+    fitCam.position.copy(target).addScaledVector(home.dir, dist); fitCam.lookAt(target); fitCam.updateMatrixWorld();
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const b of bounds) {
+      const v = b.clone().project(fitCam), x = (v.x + 1) / 2 * w, y = (1 - v.y) / 2 * h;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    return { x0, x1, y0, y1 };
+  }
+  function fitHome(w, h, li, ri) {
+    const m = Math.min(48, w * 0.04), left = li + m, right = w - ri - m, top = 20, bottom = h - 64;  // the layer ruler runs along the bottom
+    const tx = (left + right) / 2, target = home.base.clone();
+    let dist = homeDist;
+    for (let it = 0; it < 3; it++) {
+      let lo = 1, hi = 2000;
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2, b = boxOnScreen(target, mid, w, h, tx);
+        if (b.x0 >= left && b.x1 <= right && b.y0 >= top && b.y1 <= bottom) hi = mid; else lo = mid;
+      }
+      dist = hi;
+      // shift the target so the box's middle lands on the gap's middle (world units per pixel at the target's depth)
+      const b = boxOnScreen(target, dist, w, h, tx), wpp = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / h;
+      const right3 = new THREE.Vector3().setFromMatrixColumn(fitCam.matrixWorld, 0), up3 = new THREE.Vector3().setFromMatrixColumn(fitCam.matrixWorld, 1);
+      target.addScaledVector(right3, ((b.x0 + b.x1) / 2 - tx) * wpp).addScaledVector(up3, -((b.y0 + b.y1) / 2 - (top + bottom) / 2) * wpp);
+    }
+    return { target, dist };
+  }
+  home.base = home.target.clone();
+  let atHome = true;  // the camera hasn't moved from the home view, so a panel opening or closing refits it
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
     renderer.setSize(w, h, false);
     webMat.resolution.set(w, h);
     const narrow = w <= 760, li = narrow ? 0 : insets.left, ri = narrow ? 0 : insets.right;
     const availW = Math.max(200, w - li - ri);
     camera.aspect = w / h;
-    if (fitPerPx === null) {
-      // distance at which the model's bounding sphere fits the visible gap, then place the camera there once
-      const center = home.target, r = Math.max(...bounds.map(b => b.distanceTo(center)));
-      const vHalf = THREE.MathUtils.degToRad(camera.fov / 2), hHalf = Math.atan(Math.tan(vHalf) * availW / h);
-      homeDist = r / Math.sin(Math.min(vHalf, hHalf)) * 0.82;
-      camera.position.copy(home.target).addScaledVector(home.dir, homeDist);
-      controls.update();
-      fitPerPx = homeDist;
-    }
     // the orbit target (and vanishing point) sits in the middle of the visible gap between the list and the neuron
     // panel, or at ?targetx= of the canvas width
     const tx = TARGET_X ? w * TARGET_X : li + availW / 2;
     camera.setViewOffset(w, h, w / 2 - tx, 0, w, h);
-    camera.updateProjectionMatrix(); render();
+    camera.updateProjectionMatrix();
+    const fit = fitHome(w, h, li, ri);
+    home.target.copy(fit.target); home.dist = fit.dist;
+    if (fitPerPx === null) {
+      // the first fit sets the scale everything else is relative to (brightness, the zoom fade, fly distances)
+      homeDist = fit.dist; fitPerPx = homeDist;
+      camera.position.copy(home.target).addScaledVector(home.dir, home.dist); controls.target.copy(home.target);
+      controls.update();
+    } else if (atHome && layerMode === null) flyTo(home.target, home.dist, home.dir, true);
+    render();
   }
   new ResizeObserver(resize).observe(canvas);
   controls.addEventListener("change", render);
+  controls.addEventListener("start", () => { atHome = false; flight++; });
 
   // picking
   const ray = new THREE.Raycaster(); ray.params.Points.threshold = 0.05;
@@ -448,7 +484,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   let layerMode = null, saved = null, lastMarks = [];
   function enterLayer(l) {
     if (layerMode === null) saved = { pos: camera.position.clone(), tgt: controls.target.clone() };
-    layerMode = l;
+    layerMode = l; atHome = false; flight++;
     const c = new THREE.Vector3(layerX(l) + MLP_DX, SHEET_Y0 + SHEET / 2, 0);
     const dist = (SHEET / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.12;
     controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(-dist, 0, 0));
@@ -505,13 +541,19 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     for (const m of fadeLines) m.opacity = m.userData.base * (1 - 0.9 * amt);
   }
 
-  function flyTo(target, dist) {
-    const from = controls.target.clone(), to = target.clone();
+  // camera moves animate; a newer move (or the user grabbing the view) cancels the one under way. toDir turns the view
+  // to that direction on the way; keepHome leaves the home flag set (only the home view's own refits pass it)
+  let flight = 0;
+  function flyTo(target, dist, toDir = null, keepHome = false) {
+    atHome = keepHome;
+    const from = controls.target.clone(), to = target.clone(), id = ++flight;
     const dir = camera.position.clone().sub(controls.target), d0 = dir.length();
     dir.normalize();
-    const t0 = performance.now();
+    const dir0 = dir.clone(), t0 = performance.now();
     (function step(t) {
+      if (id !== flight) return;
       const k = Math.min(1, (t - t0) / 450), e = k * k * (3 - 2 * k);
+      if (toDir) dir.lerpVectors(dir0, toDir, e).normalize();
       controls.target.lerpVectors(from, to, e);
       camera.position.copy(controls.target).addScaledVector(dir, d0 + (dist - d0) * e);
       controls.update(); render();
@@ -524,9 +566,11 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   function viewLayer(layer) {
     const c = new THREE.Vector3(layerX(layer) + MLP_DX, SHEET_Y0 + SHEET / 2, 0);
     const dist = (SHEET / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.25;
-    const from = controls.target.clone(), p0 = camera.position.clone();
+    const from = controls.target.clone(), p0 = camera.position.clone(), id = ++flight;
     const p1 = c.clone().add(new THREE.Vector3(dist, 0.0001, 0)), t0 = performance.now();
+    atHome = false;
     (function step(t) {
+      if (id !== flight) return;
       const k = Math.min(1, (t - t0) / 600), e = k * k * (3 - 2 * k);
       controls.target.lerpVectors(from, c, e); camera.position.lerpVectors(p0, p1, e);
       controls.update(); render();
@@ -626,7 +670,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     // fly close to one neuron, keeping the current viewing direction
     flyToNeuron(layer, n, closeness = 0.22) { flyTo(neuronPos(layer, n), homeDist * closeness); },
     get layerMode() { return layerMode; },
-    home() { flyTo(home.target, homeDist); },
+    home() { if (layerMode !== null) exitLayer(); flyTo(home.target, home.dist, home.dir, true); },
     setMarks(marks) {
       lastMarks = marks;
       const p = [], c = [], up = new THREE.Color(1.0, 0.71, 0.28), down = new THREE.Color(1.0, 0.31, 0.6);

@@ -618,3 +618,27 @@ button.ln-tok.on { background: var(--link); color: #000; }
 .ln-samples .lab { margin: 0; }
 .ln-col { margin-bottom: 10px; }
 .ln-reply { white-space: pre-wrap; font-size: 13px; background: rgba(0,0,0,0.25); border-radius: 4px; padding: 8px 10px; min-height: 2.4em; }
+
+/* layer ruler: the layers along the bottom of the map, between the panels */
+#ruler { position: absolute; bottom: 12px; z-index: 3; display: flex; align-items: flex-end; gap: 6px; max-width: 760px; margin: 0 auto;
+  pointer-events: none; }
+#ruler > * { pointer-events: auto; }
+#ruler .r-home { flex: none; font: 13px var(--mono); color: var(--faint); background: var(--panel); border-radius: 4px; padding: 2px 7px; }
+#ruler .r-home.on, #ruler .r-home:hover { color: var(--ink); }
+#ruler .r-cells { flex: 1; display: flex; align-items: flex-end; gap: 2px; min-width: 0; }
+#ruler .r-cell { position: relative; flex: 1; min-width: 0; height: 26px; padding: 0; border: 0; background: none; display: flex;
+  flex-direction: column; justify-content: flex-end; align-items: center; cursor: pointer; }
+#ruler .r-cell::before { content: ""; display: block; width: 100%; height: 5px; border-radius: 1px; background: #2a3338; }
+#ruler .r-cell.full::before { height: 9px; background: #3b4a52; }
+#ruler .r-cell.seen::before { background: #6f8590; }
+#ruler .r-cell.full.seen::before { background: #a9c1cc; }
+#ruler .r-cell:hover::before { background: var(--ink); }
+#ruler .r-cell span { order: 2; font: 9px var(--mono); color: var(--faint); line-height: 12px; visibility: hidden; }
+#ruler .r-cell:nth-child(4n+1) span, #ruler .r-cell.center span, #ruler .r-cell.open span, #ruler .r-cell:hover span { visibility: visible; }
+#ruler .r-cell.center span { color: var(--ink); text-decoration: underline; }
+#ruler .r-cell.open::after { content: ""; position: absolute; bottom: -4px; left: 50%; width: 4px; height: 4px; margin-left: -2px;
+  border-radius: 50%; background: #fff; }
+#ruler .r-bar { position: absolute; bottom: 100%; width: 40%; height: 0; border-radius: 1px; }
+#ruler .r-bar.up { left: 10%; background: #ffb547; }
+#ruler .r-bar.dn { right: 10%; background: #ff4f9a; }
+#ruler .r-note { display: none; }

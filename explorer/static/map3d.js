@@ -355,7 +355,7 @@ export function createMap(canvas, labelsDiv, arch, cb) {
       pending = false;
       for (const m of [pointMat, hiMat, markPts.material, webPts.material]) { m.uniforms.ref.value = homeDist; m.uniforms.tdist.value = curDist(); }
       applyFade();
-      renderer.render(scene, camera); placeNotes();
+      renderer.render(scene, camera); placeNotes(); reportView();
     });
   }
   // the home view: the whole model framed in the part of the canvas the panels leave uncovered. The far end of the
@@ -392,6 +392,23 @@ export function createMap(canvas, labelsDiv, arch, cb) {
   }
   home.base = home.target.clone();
   let atHome = true;  // the camera hasn't moved from the home view, so a panel opening or closing refits it
+  // what the layer ruler shows: which layers are on screen in the uncovered gap, the layer the view centres on (when
+  // zoomed in enough to have one), the open neuron's layer, and how many marks each layer has (+ and −)
+  let markCounts = null, lastView = "";
+  function reportView() {
+    if (!cb.onView) return;
+    const w = canvas.clientWidth, h = canvas.clientHeight, li = w <= 760 ? 0 : insets.left, ri = w <= 760 ? 0 : insets.right;
+    const v = new THREE.Vector3(), inView = [];
+    for (let l = 0; l < L; l++) {
+      v.set(layerX(l) + MLP_DX, SHEET_Y0 + SHEET / 2, 0).project(camera);
+      const x = (v.x + 1) / 2 * w, y = (1 - v.y) / 2 * h;
+      inView.push(v.z < 1 && x > li && x < w - ri && y > 0 && y < h && (layerMode === null ? layerVisibility(l) > 0.5 : l === layerMode));
+    }
+    const center = layerMode !== null ? layerMode : fade.amt > 0.3 ? Math.round((fade.fx - MLP_DX) / GAP) : null;
+    const info = { inView, center, open: selected ? selected.layer : headSel ? headSel.layer : null, marks: markCounts, atHome, left: li, right: ri };
+    const key = JSON.stringify(info);
+    if (key !== lastView) { lastView = key; cb.onView(info); }
+  }
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (!w || !h) return;
@@ -691,7 +708,9 @@ export function createMap(canvas, labelsDiv, arch, cb) {
     setMarks(marks) {
       lastMarks = marks;
       const p = [], c = [], up = new THREE.Color(1.0, 0.71, 0.28), down = new THREE.Color(1.0, 0.31, 0.6);
+      markCounts = marks.length ? Array.from({ length: L }, () => [0, 0]) : null;
       for (const m of marks) {
+        markCounts[m.layer][m.sign === "-" ? 1 : 0]++;
         const v = neuronPos(m.layer, m.n), k = (m.sign === "-" ? down : up).clone().multiplyScalar(m.w ?? 1);
         p.push(v.x, v.y, v.z); c.push(k.r, k.g, k.b);
       }

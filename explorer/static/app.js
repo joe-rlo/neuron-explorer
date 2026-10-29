@@ -1,6 +1,6 @@
-import { createMap } from "./map3d.js?v=80";
+import { createMap } from "./map3d.js?v=81";
 import { createScatter } from "./scatter.js?v=39";
-import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=1";
+import { t, tp, initI18n, applyTranslations, getLang } from "./i18n.js?v=2";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -32,6 +32,7 @@ const map = createMap($("#map"), $("#layer-labels"), arch, {
     $("#layer-back").textContent = l !== null ? t("map.allLayers", { l }) : "";
     if (l !== null && l !== state.layer) setLayer(l);
   },
+  onView: info => renderRuler(info),
   onHover: (p, x, y) => {
     if (!p) return hideTip();
     if (p.type === "head") {
@@ -110,6 +111,39 @@ function hideTip() {
 }
 let hoverTimer, hoverKey = null;
 const hoverCache = new Map();
+// ---------- layer ruler: the 32 layers along the bottom of the map ----------
+// Full-attention layers stand taller; the layers on screen are lit, the one the view centres on underlined, the open
+// neuron's layer dotted, and bars show how many marks (lens hits, or what fired) each layer has. A click flies there.
+// rulerNote: a line of text per layer that a token's play-through writes in (see playToken)
+const rulerNote = [];
+let rulerInfo = null;
+function renderRuler(info = rulerInfo) {
+  rulerInfo = info; const el = $("#ruler"); if (!el || !info) return;
+  // clear of the legend button at the bottom left
+  const lg = $("#legend summary").getBoundingClientRect();
+  el.style.left = `${Math.max(info.left + 16, lg.right + 14)}px`; el.style.right = `${info.right + 16}px`;
+  if (!el.children.length) {
+    el.innerHTML = `<button class="r-home" title="${esc(t("ruler.home"))}">⌂</button><div class="r-cells">${Array.from({ length: arch.n_layers }, (_, l) =>
+      `<button class="r-cell${arch.layer_types[l] === "full_attention" ? " full" : ""}" data-l="${l}"><i class="r-bar up"></i><i class="r-bar dn"></i><span>${l}</span></button>`).join("")}</div><div class="r-note"></div>`;
+  }
+  const mx = info.marks ? Math.max(1, ...info.marks.map(([a, b]) => a + b)) : 1;
+  el.querySelectorAll(".r-cell").forEach(c => {
+    const l = +c.dataset.l, [up, dn] = info.marks?.[l] || [0, 0];
+    c.classList.toggle("seen", info.inView[l]); c.classList.toggle("center", info.center === l); c.classList.toggle("open", info.open === l);
+    c.querySelector(".up").style.height = `${Math.round(14 * Math.sqrt(up / mx))}px`;
+    c.querySelector(".dn").style.height = `${Math.round(14 * Math.sqrt(dn / mx))}px`;
+    c.title = t(arch.layer_types[l] === "full_attention" ? "ruler.full" : "ruler.linear", { l })
+      + (up + dn ? ` · ${t("ruler.marks", { up, dn })}` : "") + (rulerNote[l] ? ` · ${rulerNote[l]}` : "");
+  });
+  el.querySelector(".r-home").classList.toggle("on", !info.atHome);
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest("#ruler")) return;
+  const c = e.target.closest(".r-cell");
+  if (c) { if (map.layerMode !== null) map.enterLayer(+c.dataset.l); else map.viewLayer(+c.dataset.l); }
+  else if (e.target.closest(".r-home")) map.home();
+});
+
 // tip lives in the embed view section; lift it to body so the map can use it too
 document.body.appendChild(tip);
 

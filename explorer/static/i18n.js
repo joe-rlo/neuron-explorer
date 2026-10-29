@@ -101,6 +101,10 @@ const en = {
   "map.fullAttention": "full attention · {q} q / {kv} kv heads",
   "map.linearAttention": "linear attention · {k} k / {v} v heads",
   "map.mass": "mass {z}",
+  "ruler.home": "back to the whole model (H)",
+  "ruler.full": "L{l} · full attention",
+  "ruler.linear": "L{l} · linear attention",
+  "ruler.marks": "{up} up / {dn} down",
 
   "web.title": "web: the open neuron's top links each way (later hops follow {k}) · {n} links",
   "web.head": "web of L{layer} N{n} · {links} links · {src}, ranked by lift over each layer",
@@ -249,6 +253,10 @@ const zh = {
   "map.fullAttention": "全注意力 · {q} 个 q / {kv} 个 kv 头",
   "map.linearAttention": "线性注意力 · {k} 个 k / {v} 个 v 头",
   "map.mass": "簇质量 {z}",
+  "ruler.home": "回到整个模型 (H)",
+  "ruler.full": "L{l} · 全注意力",
+  "ruler.linear": "L{l} · 线性注意力",
+  "ruler.marks": "{up} 个向上 / {dn} 个向下",
 
   "web.title": "连接网：当前神经元的双向最强连接（后续跳数每跳取前 {k} 条）· {n} 条连接",
   "web.head": "L{layer} N{n} 的连接网 · {links} 条连接 · {src}，按各层提升度排序",

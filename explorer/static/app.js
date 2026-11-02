@@ -1580,7 +1580,7 @@ function showLab(view) {
   if (curTab() === "lab") renderLab(); else { focusEl.classList.add("on"); syncTabs(); setTab("lab"); setFocusCollapsed(false); }
 }
 function renderLab() {
-  ({ notebook: renderNotebook, guide: renderGuide, challenges: renderChallenges, guess: renderGuess })[LAB.view]?.();
+  ({ notebook: renderNotebook, guide: renderGuide, challenges: renderChallenges, guess: renderGuess, edits: renderEdits })[LAB.view]?.();
 }
 const when = ts => { const d = new Date(ts); return isNaN(d) ? "" : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toTimeString().slice(0, 5)}`; };
 const neuronChip = x => `<span class="chip nchip" data-l="${x.layer}" data-n="${x.n}" title="open this neuron">L${x.layer} N${x.n}</span>`;
@@ -1687,6 +1687,74 @@ async function runChallenge(id) {
   } catch (err) { r.error = String(err); }
   finally { X.job = null; r.live = false; if (curTab() === "lab" && LAB.view === "challenges") renderChallenges(); }
 }
+
+// ---- weight edits: changes written into the down_proj weights (not hooks), applied to the live model one at a time ----
+const WE = { state: null, prompt: "What is 17 × 24? Answer briefly.", scale: "0", name: "", cmp: null };
+const weApi = async (p, body) => { const r = await api(p, body); if (r.error) throw new Error(r.error); return r; };
+function editBadge() {
+  const on = WE.state?.edits.find(e => e.id === WE.state.applied);
+  const b = $("#wedit-badge"); b.hidden = !on;
+  if (on) { b.textContent = `weights edited: ${on.name}`; b.title = "everything that runs the live model uses the edited weights until you undo it · click to open the edits"; }
+}
+async function loadEdits() {
+  try { WE.state = await api("/api/wedits"); } catch (err) { return err; }
+  editBadge();
+}
+$("#wedit-badge").onclick = () => showLab("edits");
+async function renderEdits(reload = true) {
+  const el = $("#lab-body");
+  if (reload || !WE.state) { const err = await loadEdits(); if (err) { el.innerHTML = `<div class="err">${esc(err.message)}</div>`; return; } }
+  if (curTab() !== "lab" || LAB.view !== "edits") return;
+  const st = WE.state, who = attemptNeurons(), share = c => `${c * st.hidden} weights (${(100 * c * st.hidden / st.total).toPrecision(2)}%)`;
+  const busy = !!WE.cmp?.live;
+  const cmp = id => {
+    const c = WE.cmp?.id === id ? WE.cmp : null; if (!c) return "";
+    if (c.live) return `<div class="xnote dim">running the prompt on the original weights, then the edited ones…</div>`;
+    if (c.error) return `<div class="err">${esc(c.error)}</div>`;
+    const col = (k, h) => `<div class="we-col"><div class="xk">${h}</div>${c.r[k].map(x => `<div class="ch-reply">${esc(x.text)}<span class="dim mono"> · ${x.tokens} tok</span></div>`).join("")}</div>`;
+    return `<div class="we-cmp">${col("original", "original")}${col("edited", "edited")}</div>`;
+  };
+  const rows = st.edits.map(e => `<div class="ch" data-id="${esc(e.id)}"><div class="ch-head"><b>${esc(e.name)}</b>${e.id === st.applied ? ` <span class="we-on mono">applied</span>` : ""}</div>
+      <div class="recipe mono dim">L${e.layers.join(", L")} · ${e.columns} neuron${e.columns === 1 ? "" : "s"} · ${share(e.columns)} · ${e.kinds.join(" + ")}</div>
+      ${e.note ? `<div class="xline">${esc(e.note)}</div>` : ""}${e.result ? `<div class="xnote dim">result: ${esc(e.result)}</div>` : ""}
+      <div class="ch-try">${e.id === st.applied ? `<button type="button" class="we-undo">undo</button>` : `<button type="button" class="we-apply"${busy ? " disabled" : ""}>apply</button>`}
+        <button type="button" class="we-cmp-go"${busy ? " disabled" : ""}>compare</button>
+        <button type="button" class="we-del dim"${e.id === st.applied ? " disabled" : ""}>delete</button></div>${cmp(e.id)}</div>`).join("");
+  el.innerHTML = `<div class="nb-head"><span class="dim">${st.edits.length} edit${st.edits.length === 1 ? "" : "s"}${st.applied ? " · one applied" : " · the model has its original weights"}</span></div>
+    <div class="xnote dim">An edit changes the weights themselves: the columns of down_proj that some neurons write into the residual stream. Applied, it stays in place for everything that runs the live model (chat, runs, fires, the Lab and Learn) until you undo it, which restores the original columns exactly; the lens, connections and map are precomputed from the original weights and don't change. Compare runs one prompt on both, paired by seed. Edits are files in experiments/weight_edits/; projection edits come from explorer/wsp_trace.py.</div>
+    <div class="ch"><div class="ch-head"><b>new edit</b><span class="dim"> · scale the columns of ${who.length ? `${pinned.length ? "the set" : "the open neuron"} ${who.map(neuronChip).join("")}` : `<span class="warn">no neuron: open one, or build a set with + set</span>`}</span></div>
+      <div class="ch-try"><input id="we-name" placeholder="name" value="${esc(WE.name)}" spellcheck="false"><label class="xf">× <input id="we-scale" class="mono" inputmode="decimal" value="${esc(WE.scale)}" aria-label="scale"></label>
+        <button type="button" id="we-make"${who.length ? "" : " disabled"}>save</button></div>
+      <div class="xnote dim">× 0 removes them from the weights (a permanent ablation), × 2 doubles what they write.</div></div>
+    <div class="we-prompt"><label class="xk" for="we-prompt">compare prompt</label><input id="we-prompt" value="${esc(WE.prompt)}" spellcheck="false"></div>
+    ${rows || `<div class="xnote dim">No edits yet.</div>`}`;
+}
+$("#lab-body").addEventListener("input", e => {
+  if (e.target.id === "we-prompt") WE.prompt = e.target.value;
+  if (e.target.id === "we-scale") WE.scale = e.target.value;
+  if (e.target.id === "we-name") WE.name = e.target.value;
+});
+$("#lab-body").addEventListener("click", async e => {
+  const b = e.target.closest(".we-apply, .we-undo, .we-del, .we-cmp-go, #we-make"); if (!b) return;
+  const id = b.closest(".ch")?.dataset.id;
+  try {
+    if (b.id === "we-make") {
+      const scale = parseFloat(WE.scale.replace("−", "-"));
+      if (!Number.isFinite(scale)) throw new Error("the scale must be a number");
+      WE.state = await weApi("/api/wedits/make", { name: WE.name.trim(), neurons: attemptNeurons(), scale }); WE.name = "";
+    } else if (b.classList.contains("we-apply")) { b.disabled = true; b.textContent = "applying…"; WE.state = await weApi("/api/wedits/apply", { id }); }
+    else if (b.classList.contains("we-undo")) WE.state = await weApi("/api/wedits/undo", {});
+    else if (b.classList.contains("we-del")) { if (!confirm("Delete this edit's file?")) return; WE.state = await weApi("/api/wedits/delete", { id }); }
+    else {
+      WE.cmp = { id, live: true }; renderEdits(false);
+      try { WE.cmp.r = await weApi("/api/wedits/compare", { id, prompt: WE.prompt, samples: 2, max_new: 200 }); } catch (err) { WE.cmp.error = err.message; }
+      WE.cmp.live = false;
+    }
+  } catch (err) { $("#status").textContent = err.message; }
+  editBadge();
+  if (curTab() === "lab" && LAB.view === "edits") renderEdits(false);
+});
+loadEdits();
 
 // ---- guess the neuron: a hidden neuron's replies at +dose and −dose; its label among three others of the same kind ----
 const G = { score: null, round: null };

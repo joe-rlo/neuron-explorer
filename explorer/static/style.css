@@ -684,3 +684,14 @@ button.ln-tok.on { background: var(--link); color: #000; }
 #inf-play:hover { color: var(--ink); }
 #inf-play-note { font: 11px var(--mono); }
 #inf-toks:empty + #inf-play-row { display: none; }
+
+/* weight edits */
+#wedit-badge { font-size: 11px; color: var(--bg); background: var(--up); border: 0; border-radius: 3px; padding: 3px 7px; cursor: pointer; white-space: nowrap; }
+#wedit-badge[hidden] { display: none; }
+.we-on { font-size: 10.5px; color: var(--bg); background: var(--up); border-radius: 3px; padding: 1px 5px; margin-left: 4px; }
+#we-name { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
+.we-prompt { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; }
+.we-prompt input { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
+.we-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.we-col { min-width: 0; }
+.we-col .ch-reply { max-height: 220px; overflow: auto; }

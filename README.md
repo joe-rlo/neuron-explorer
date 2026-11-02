@@ -62,6 +62,14 @@ both are untracked.
   each neuron's lens words (`explorer/circuit.py`).
 - **play a token** (run tab, fires mode): what fired at a token, one layer at a time, with the model's guess for the
   next word at each layer.
+- **weight edits** (Lab tab): changes written into the down_proj weights themselves rather than hooks, after
+  [weight-space programming](https://rikiyat.github.io/blog/weight-space-programming/). An edit scales some neurons'
+  columns (× 0 removes them for good) or projects a direction out of them; it's applied to the live model one at a
+  time, undone exactly, and compared against the original on paired seeds. A header badge shows while one is applied.
+  Edits are files in `experiments/weight_edits/` (`explorer/wedits.py`). `explorer/wsp_probe.py` runs GSM8K with
+  thinking on and scores accuracy and cap hits, with or without an edit; `explorer/wsp_trace.py` finds the direction
+  the MLPs write when the model keeps deliberating and builds a projection edit from it. The first try at making the
+  4B model stop overthinking didn't help; see `research_log.md` (2026-11-02).
 - smaller things: a dismissable first-run tour, a map legend, top-bar tooltips, a notice when opening a neuron switches
   layers.
 

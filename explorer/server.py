@@ -27,6 +27,7 @@ import tasks as tk  # noqa: E402
 import lab  # noqa: E402
 import learn  # noqa: E402
 import circuit  # noqa: E402
+import wedits  # noqa: E402
 
 RUNS, STATS = os.path.join(ROOT, "runs"), os.path.join(ROOT, "stats")
 # the agent's neuronary.org tools (agent_mcp.py) read the person's token from here when set
@@ -988,6 +989,131 @@ CHALLENGE_LOG = os.path.join(EXPERIMENTS, "challenges.json")
 
 def _challenges():
     return _read_json(CHALLENGES, [])
+
+
+# ---------- weight edits: changes written into the down_proj weights, applied to the live model one at a time ----------
+WEDITS = os.path.join(EXPERIMENTS, "weight_edits")
+_wedit = {"id": None, "saved": None}  # the applied edit and the columns it replaced
+
+
+def _wedit_load(eid):
+    path = os.path.join(WEDITS, os.path.basename(eid) + ".json")
+    if not os.path.exists(path):
+        raise ValueError(f"no edit {eid}")
+    e = _read_json(path, None)
+    wedits.check(e, _cfg.num_hidden_layers, _cfg.intermediate_size, _cfg.hidden_size)
+    return e
+
+
+def _wedit_set(eid):
+    """Puts the model in the state of edit `eid` (None = the original weights). Call with rt.lock held."""
+    if _wedit["saved"] is not None:
+        wedits.restore(rt.lm.layers, _wedit["saved"])
+        _wedit.update(id=None, saved=None)
+    if eid is not None:
+        _wedit.update(id=eid, saved=wedits.apply(rt.lm.layers, _wedit_load(eid)))
+    rt._lens_cache.clear()  # lens and connection results read the weights; anything cached is from the old ones
+    rt._con_cache.clear()
+
+
+def _wedit_state():
+    return {"edits": wedits.listing(WEDITS), "applied": _wedit["id"], "hidden": _cfg.hidden_size,
+            "total": _cfg.num_hidden_layers * _cfg.intermediate_size * _cfg.hidden_size}
+
+
+@app.get("/api/wedits")
+def wedits_list():
+    return _wedit_state()
+
+
+@app.post("/api/wedits/apply")
+async def wedits_apply(req: Request):
+    """Applies an edit to the live model (undoing any other first); every live feature then runs on the edited
+    weights until undo."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    try:
+        rt.ensure_loaded()
+        with rt.lock:
+            _wedit_set(b["id"])
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, 400)
+    return _wedit_state()
+
+
+@app.post("/api/wedits/undo")
+def wedits_undo():
+    if rt.model is not None:
+        with rt.lock:
+            _wedit_set(None)
+    return _wedit_state()
+
+
+@app.post("/api/wedits/make")
+async def wedits_make(req: Request):
+    """Saves a scale edit over a neuron set: {name, neurons: [{layer, n}], scale}. Scale 0 removes the neurons from
+    the weights for good, 2 doubles what they write. Projection edits come from explorer/wsp_trace.py."""
+    b = await req.json()
+    steps = {}
+    for x in b.get("neurons") or []:
+        steps.setdefault(int(x["layer"]), []).append(int(x["n"]))
+    e = {"name": str(b.get("name") or "").strip(), "note": str(b.get("note") or ""),
+         "edits": [{"layer": l, "neurons": sorted(set(ns)), "scale": float(b.get("scale", 0))} for l, ns in sorted(steps.items())]}
+    try:
+        wedits.check(e, _cfg.num_hidden_layers, _cfg.intermediate_size, _cfg.hidden_size)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, 400)
+    eid, k = wedits.slug(e["name"]), 2
+    while os.path.exists(os.path.join(WEDITS, eid + ".json")):
+        eid, k = f"{wedits.slug(e['name'])}-{k}", k + 1
+    _write_json(os.path.join(WEDITS, eid + ".json"), e)
+    return {**_wedit_state(), "id": eid}
+
+
+@app.post("/api/wedits/delete")
+async def wedits_delete(req: Request):
+    b = await req.json()
+    eid = os.path.basename(b["id"])
+    if eid == _wedit["id"]:
+        return JSONResponse({"error": "undo this edit before deleting it"}, 400)
+    try:
+        os.remove(os.path.join(WEDITS, eid + ".json"))
+    except OSError:
+        return JSONResponse({"error": f"no edit {eid}"}, 400)
+    return _wedit_state()
+
+
+@app.post("/api/wedits/compare")
+def wedits_compare(b: dict):
+    """The same prompt through the original and the edited weights, `samples` replies each on paired seeds, so a
+    difference comes from the edit. Leaves the model as it found it."""
+    if off := _live_off():
+        return off
+    cfg = exm.config()
+    n = builtins.max(1, builtins.min(8, int(b.get("samples", 2))))
+    max_new = builtins.max(16, builtins.min(1024, int(b.get("max_new", 200))))
+    temp, seed = float(b.get("temperature", cfg["temperature"])), int(b.get("seed", cfg["seed"]))
+    msgs = [{"role": "user", "content": str(b.get("prompt") or "")}]
+    rt.ensure_loaded()
+    out = {}
+    with rt.lock:
+        was = _wedit["id"]
+        try:
+            for side, eid in (("original", None), ("edited", b["id"])):
+                _wedit_set(eid)
+                text, ids = [""] * n, None
+                for r, delta in rt.generate([], [msgs] * n, max_new, None, [seed + i for i in range(n)], temp):
+                    if r is None:
+                        ids = delta
+                    else:
+                        text[r] += delta
+                out[side] = [{"text": t, "tokens": len(i or [])} for t, i in zip(text, ids or [[]] * n)]
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        finally:
+            _wedit_set(was)
+    return {**out, "max_new": max_new, "temperature": temp}
 
 
 @app.get("/api/challenges")

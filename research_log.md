@@ -280,3 +280,24 @@ Per-layer Spearman ρ between the two scores is 0.84–0.95. The hypothesis is d
 **Captures lost and rebuilt.** The sweep's fork captures (MLP input at layers L, L+1, L+4, L+8 at the last prompt token) were never pulled from the pods before deletion. A capture depends only on (direction, dose, prompt), because the push applies at every prompt position, so it can be rebuilt by prefill. `sweep/capture_prefill.py` does that, about 800 rollouts/s on a 4090. Against the fork's own surviving end-to-end captures (294 rollouts, 4 layers) the median relative error is 1.1–1.5% and the max 2%. That is the same bf16 band as the original HF-vs-fork equivalence check. All 32 runs are rebuilt (6.2 GB, `captures/<run>.mlp_in.npy`, rows aligned to jsonl lines). Lesson for the pipeline: pulling a sweep means runs, stats *and* captures, checked by listing every output directory the run's meta names.
 
 **Embeddings** UMAPs now exist for all 30 subset layers. Each took about 50 s of CPU-bound UMAP on the pod.
+
+## 2026-11-02 — weight-space programming: can an edit stop the 4B model overthinking?
+
+Following [Weight-Space Programming](https://rikiyat.github.io/blog/weight-space-programming/) (Experiment 8 there: Qwen3.5-0.8B looped on math; one direction written by the MLPs of two layers was projected out of 64 down_proj columns each, 0.016% of the weights, and MATH-500 went 7.9 → 48.1).
+
+**The obstacle.** Qwen3.5-4B with thinking on doesn't loop on GSM8K; it overthinks. It usually has the answer within a few hundred tokens, then keeps checking ("Double check… Final check… Ready to write." and another round). 32 training problems at a 3072-token cap (temperature 0.6, top-p 0.95, top-k 20; MPS, so caps of 2–3k instead of the article's 32k): 13/32 right, 19/32 hit the cap, 0 loops, and 13 of the 14 that closed their thinking were right. Nearly every error is running out of budget.
+
+**The trace.** `explorer/wsp_trace.py` compares each layer's MLP output where the model stopped against where it had the answer and went on. First attempt, stop = the token before `</think>` and continue = paragraph breaks: every layer separated them perfectly, layer 0 included, because stop was always `\n` and continue always `\n\n`. It measured token identity. Second attempt, token-matched: the full stop ending a paragraph, followed by `\n` + `</think>` (14 cases) or by `\n\n` and more checking (299). Held-out AUC (leave one reply out) 0.88 at L0 rising to 0.99 from L18; the gap relative to the outputs' spread peaks at L22–26. The top 64 neurons (activation gap × column reach along the direction) carry 33–56% of the gap per layer, 56% at L22.
+
+**The edits.** Same 16 fresh training problems, same seeds, 2048-token cap:
+
+| | right | hit cap | mean tokens |
+|---|---|---|---|
+| original | 7/16 | 9 | 1810 |
+| A: L22+L26, 64 neurons each, projected out | 8/16 | 8 | 1705 |
+| B: L18–28 (6 layers), 128 each | 7/16 | 9 | 1736 |
+| C: B with alpha 2 (reversed) | 6/16 | 10 | 1910 |
+
+No edit moved it beyond noise. The direction tracks the decision to stop but doesn't cause it: most likely it reads "this is a closing sentence" ("Ready to write.") rather than the switch itself. A causal check (add the stop-minus-continue mean to a layer's MLP output at continue points and read P(`\n`)) was started and killed by the OS for memory before it finished; it's the next thing to run, and it bounds what any edit of that layer can do. Caveats: 14 stop cases is few; 16 sampled problems can't see small effects; the short cap makes some cap hits our budget, not the model's.
+
+**Kept.** The tooling (`explorer/wsp_probe.py`, `explorer/wsp_trace.py`) and a weight-edits view in the Lab (`explorer/wedits.py`): edits as files, applied to the live model and undone exactly, with a paired original/edited compare.

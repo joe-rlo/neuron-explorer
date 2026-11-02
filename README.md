@@ -1,5 +1,9 @@
 # neuron explorer
 
+> This is a fork of [lyramakesmusic/neuron-explorer](https://github.com/lyramakesmusic/neuron-explorer). The sweep, the
+> explorer and the caches are theirs; this fork adds experiment tools, a Lab, a Learn tab and map features, listed under
+> [This fork](#this-fork). Upstream's MIT license applies to all of it.
+
 Steering-first neuron explorer for Qwen3.5-4B. Every MLP neuron in a layer is pushed up and down on a few prompts, every
 rollout is kept, and the explorer lays the results out over a 3D view of the model.
 
@@ -31,6 +35,37 @@ steered chat, lens, connections and live inference over your own text.
   tools and a shell in your home folder. Its prompt is `explorer/agent_prompt.md` plus `explorer/agent_methodology.md`, and
   `explorer/agent_prompt.local.md` when present (untracked, for your own additions);
   `EXPLORER_CLAUDE_MODEL` picks the model. The server answers only pages and tools on this machine.
+
+## This fork
+
+Everything here reads the same `runs/`, `stats/` and `explorer/cache/` as upstream and doesn't change them. What the
+new tools save (experiment results, hypotheses, ratings) goes in `experiments/`, and names in `explorer/names.json`;
+both are untracked.
+
+- **experiment mode** (neuron panel): steered chats and dose sweeps with `n` samples on paired seeds (temperature 0.7 by
+  default), outcome measures, bootstrap intervals, paired stats and a coherence check, so a steering effect comes with
+  its uncertainty. Thresholds are in `explorer/experiment_config.json`.
+- **lesion**: ablate a neuron or a pinned set (mean ablation by default) and compare against the intact model.
+- **tuning curves** and **contrast search**: per-item responses over stimulus sets with selectivity and d', and fires
+  mode with "minus" texts to find neurons that fire on one text but not another.
+- **task battery**: behavioural tasks run under steering — delay discounting, risk preference and loss aversion,
+  gain/loss framing, Likert items with your own statements.
+- **Lab tab**: a hypothesis log (write a prediction before a run, give a verdict after), blind rating of shuffled
+  columns, challenges scored by smallest dose or fewest neurons, "guess the neuron", and a field guide with a card per
+  named neuron (PNG and Markdown export).
+- **Learn tab**: chapters on tokens, embeddings, the layers, attention, neurons, choosing the next word and steering,
+  each run live on a sentence you type.
+- **map**: the model framed in the space the panels leave, a ring and label on the open neuron, a layer ruler along the
+  bottom (what's on screen, where the hits are, the logit-lens guess while playing), hits readable from the overview,
+  named neurons pinned with their names, and keys (← → step layers, F frames the open neuron, H goes home).
+- **circuit view**: the open neuron's strongest links before and after it as a flat diagram, with the chain's sign and
+  each neuron's lens words (`explorer/circuit.py`).
+- **play a token** (run tab, fires mode): what fired at a token, one layer at a time, with the model's guess for the
+  next word at each layer.
+- smaller things: a dismissable first-run tour, a map legend, top-bar tooltips, a notice when opening a neuron switches
+  layers.
+
+Tests: `uv run pytest tests`.
 
 ## Sweep
 
